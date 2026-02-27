@@ -21,6 +21,8 @@ Scripts/
 ├── prepare_firmware.sh               # Downloads IPSWs, merges cloudOS into iPhone
 ├── prepare_firmware_build_manifest.py # Generates hybrid BuildManifest.plist & Restore.plist
 ├── patch_firmware.py                 # Patches 6 boot-chain components (41+ modifications)
+├── iboot_patcher.py                  # Dynamic iBoot patcher (iBSS/iBEC/LLB), string-anchored
+├── txm_patcher.py                    # Dynamic TXM patcher, trustcache hash lookup bypass
 ├── kernel_patcher.py                 # Dynamic kernel patcher (25 patches, string-anchored)
 ├── build_ramdisk.py                  # Builds SSH ramdisk with trustcache
 ├── ramdisk_send.sh                   # Sends ramdisk to device via irecovery
@@ -102,38 +104,24 @@ iPhone restore directory (`kernelcache.*`, `Firmware/{agx,all_flash,ane,dfu,pmp}
 
 | Component | Notes |
 |-----------|-------|
-| Cryptex1,SystemOS | System volume DMG |
-| Cryptex1,AppOS | App volume DMG |
 | OS | iPhone OS image |
 | SystemVolume | System partition |
 | StaticTrustCache | Static trust cache |
-| AppleLogo / RestoreLogo | Boot logos |
-| RecoveryMode | Recovery mode resources |
-| Cryptex1 metadata/keys | Merged from iPhone erase identity into PCC identities |
+| Ap,SystemVolumeCanonicalMetadata | System volume metadata |
 
-#### Ramdisk — source depends on build identity
+> Cryptex1 components (SystemOS/AppOS DMGs) are **not** included in the BuildManifest.
+> They are only needed by `install_cfw.sh` which reads paths from the original iPhone manifest separately.
 
-| Identity | Ramdisk Source |
-|----------|---------------|
-| Erase (Identity 0) | PCC cloudOS (PROD erase ramdisk) |
-| Upgrade (Identity 1) | iPhone (upgrade ramdisk) |
-| Research Erase (Identity 2) | PCC cloudOS (erase ramdisk) |
-| Research Upgrade (Identity 3) | iPhone (upgrade ramdisk) |
-| Recovery (Identity 4) | None |
+### Build Identity
 
-### Build Identities
+`prepare_firmware_build_manifest.py` generates a **single** DFU erase-install identity (20 components).
+The VM always boots via DFU restore, so only one identity is needed.
 
-`prepare_firmware_build_manifest.py` generates 5 identities in BuildManifest.plist:
+| Variant | Boot Chain | Ramdisk |
+|---------|-----------|---------|
+| `Darwin Cloud Customer Erase Install (IPSW)` | PCC RELEASE (LLB/iBSS/iBEC) + RESEARCH (iBoot/TXM) | PCC erase |
 
-| # | Name | Boot Chain | Ramdisk | Cryptex1 | Variant |
-|---|------|-----------|---------|----------|---------|
-| 0 | Erase | PCC RELEASE | PCC erase | iPhone | `Darwin Cloud Customer Erase Install (IPSW)` |
-| 1 | Upgrade | PCC RESEARCH | iPhone upgrade | iPhone | `Darwin Cloud Customer Upgrade Install (IPSW)` |
-| 2 | Research Erase | PCC RESEARCH | PCC erase | None | `Darwin Cloud Customer Research Erase Install (IPSW)` |
-| 3 | Research Upgrade | PCC RESEARCH | iPhone upgrade | None | `Darwin Cloud Customer Research Upgrade Install (IPSW)` |
-| 4 | Recovery | PCC RESEARCH | None | None | `Darwin Cloud Customer Recovery (IPSW)` |
-
-idevicerestore selects Identity 0 by partial-matching `Info.Variant` against
+idevicerestore selects this identity by partial-matching `Info.Variant` against
 `"Erase Install (IPSW)"` while excluding `"Research"`.
 
 ### Patched Components Summary
@@ -143,11 +131,11 @@ idevicerestore selects Identity 0 by partial-matching `Info.Variant` against
 | Component | Patches | Technique |
 |-----------|---------|-----------|
 | AVPBooter | 1 | `mov x0, #0` (DGST bypass) |
-| iBSS | 2 | Serial labels + image4 callback NOP |
-| iBEC | 3 | Serial + image4 NOP + boot-args string replace |
-| LLB | 6 | Serial + image4 + boot-args + rootfs + panic (fixed offsets) |
-| TXM | 1 | `mov x0, #0` at fixed offset 0x2C1F8 |
-| KernelCache | 25 | Dynamic via `KernelPatcher` (string anchors, ADRP+ADD xrefs, BL frequency) |
+| iBSS | 2 | Dynamic via `iboot_patcher.py` (string anchors, instruction patterns) |
+| iBEC | 3 | Dynamic via `iboot_patcher.py` (string anchors, instruction patterns) |
+| LLB | 6 | Dynamic via `iboot_patcher.py` (string anchors, instruction patterns) |
+| TXM | 1 | Dynamic via `txm_patcher.py` (trustcache hash lookup bypass) |
+| KernelCache | 25 | Dynamic via `kernel_patcher.py` (string anchors, ADRP+ADD xrefs, BL frequency) |
 
 **CFW patches** (`patch_cfw.py` / `install_cfw.sh`) — all 4 targets from **iPhone** Cryptex SystemOS:
 

@@ -31,14 +31,6 @@ def entry(identities, idx, key):
     return copy.deepcopy(identities[idx]["Manifest"][key])
 
 
-def try_entry(identities, idx, key):
-    """Deep-copy a Manifest entry, or return None if the key is absent."""
-    manifest = identities[idx].get("Manifest", {})
-    if key in manifest:
-        return copy.deepcopy(manifest[key])
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Identity discovery
 # ---------------------------------------------------------------------------
@@ -174,8 +166,10 @@ def main():
 
     # ── RELEASE kernel (patched by patch_firmware.py) ────────────────
     m["RestoreKernelCache"] = entry(C, PROD, "RestoreKernelCache")
-    kc = try_entry(C, PROD, "KernelCache")
-    m["KernelCache"] = kc if kc else copy.deepcopy(m["RestoreKernelCache"])
+    if "KernelCache" in C[PROD]["Manifest"]:
+        m["KernelCache"] = entry(C, PROD, "KernelCache")
+    else:
+        m["KernelCache"] = copy.deepcopy(m["RestoreKernelCache"])
 
     # ── CloudOS erase ramdisk ────────────────────────────────────────
     m["RestoreRamDisk"]    = entry(C, PROD, "RestoreRamDisk")
@@ -186,14 +180,6 @@ def main():
     m["OS"]              = entry(I, I_ERASE, "OS")
     m["StaticTrustCache"] = entry(I, I_ERASE, "StaticTrustCache")
     m["SystemVolume"]    = entry(I, I_ERASE, "SystemVolume")
-
-    # ── Cryptex1 manifest entries (install_cfw.sh reads DMG paths) ───
-    for k in ("Cryptex1,AppOS", "Cryptex1,AppTrustCache",
-              "Cryptex1,AppVolume", "Cryptex1,SystemOS",
-              "Cryptex1,SystemTrustCache", "Cryptex1,SystemVolume"):
-        e = try_entry(I, I_ERASE, k)
-        if e:
-            m[k] = e
 
     # ── Assemble BuildManifest ───────────────────────────────────────
     build_manifest = {
