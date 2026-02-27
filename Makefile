@@ -11,13 +11,17 @@ DISK_SIZE   ?= 64
 # ─── Paths ────────────────────────────────────────────────────────
 SCRIPTS     := scripts
 BINARY      := .build/release/vphone-cli
-ENTITLEMENTS := vphone.entitlements
+ENTITLEMENTS := sources/vphone.entitlements
 VENV        := .venv
 LIMD_PREFIX := .limd
 IRECOVERY   := $(LIMD_PREFIX)/bin/irecovery
 IDEVICERESTORE := $(LIMD_PREFIX)/bin/idevicerestore
+PYTHON      := $(VENV)/bin/python3
 
 SWIFT_SOURCES := $(shell find sources -name '*.swift' -o -name '*.m' -o -name '*.h')
+
+# ─── Environment — prefer project-local binaries ────────────────
+export PATH := $(CURDIR)/$(LIMD_PREFIX)/bin:$(CURDIR)/$(VENV)/bin:$(CURDIR)/.build/release:$(PATH)
 
 # ─── Default ──────────────────────────────────────────────────────
 .PHONY: help
@@ -135,7 +139,7 @@ fw_prepare:
 	cd $(VM_DIR) && bash "$(CURDIR)/$(SCRIPTS)/fw_prepare.sh"
 
 fw_patch:
-	cd $(VM_DIR) && python3 "$(CURDIR)/$(SCRIPTS)/fw_patch.py" .
+	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/fw_patch.py" .
 
 # ═══════════════════════════════════════════════════════════════════
 # Restore
@@ -156,7 +160,7 @@ restore:
 .PHONY: ramdisk_build ramdisk_send
 
 ramdisk_build:
-	cd $(VM_DIR) && python3 "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
+	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
 
 ramdisk_send:
 	cd $(VM_DIR) && IRECOVERY="$(CURDIR)/$(IRECOVERY)" zsh "$(CURDIR)/$(SCRIPTS)/ramdisk_send.sh"

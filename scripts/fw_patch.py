@@ -257,8 +257,7 @@ COMPONENTS = [
     ("iBEC", True, ["Firmware/dfu/iBEC.vresearch101.RELEASE.im4p"], patch_ibec, False),
     ("LLB", True, ["Firmware/all_flash/LLB.vresearch101.RELEASE.im4p"], patch_llb, False),
     ("TXM", True, ["Firmware/txm.iphoneos.research.im4p"], patch_txm, True),
-    ("kernelcache", True, ["kernelcache.release.vphone600"], patch_kernelcache, True),
-    ("kernelcache", True, ["kernelcache.release.vresearch101"], patch_kernelcache, True),
+    ("kernelcache", True, ["kernelcache.research.vphone600"], patch_kernelcache, True),
 ]
 
 
