@@ -41,8 +41,12 @@ pip install -r "${REQUIREMENTS}"
 # so we build a dylib from it and place it inside the venv.
 echo ""
 echo "=== Building keystone dylib ==="
-
-KEYSTONE_STATIC="$(find /opt/homebrew/Cellar/keystone -name 'libkeystone.a' -type f 2>/dev/null | head -1)"
+KEYSTONE_DIR="/opt/homebrew/Cellar/keystone"
+if [ ! -d "${KEYSTONE_DIR}" ]; then
+  echo "Error: keystone not found. Install with: brew install keystone"
+  exit 1
+fi
+KEYSTONE_STATIC="$(find "${KEYSTONE_DIR}" -name 'libkeystone.a' -type f 2>/dev/null | head -1)"
 if [[ -z "${KEYSTONE_STATIC}" ]]; then
   echo "Error: libkeystone.a not found. Install with: brew install keystone"
   exit 1
