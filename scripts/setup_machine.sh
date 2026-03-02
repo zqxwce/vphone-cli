@@ -3,9 +3,9 @@
 #
 # Runs README flow up to (but not including) "Subsequent Boots":
 # 1) Host deps + project setup/build
-# 2) vm_new + fw_prepare + fw_patch
+# 2) vm_new + fw_prepare + fw_patch (or fw_patch_jb with --jb)
 # 3) DFU restore (boot_dfu + restore_get_shsh + restore)
-# 4) Ramdisk + CFW (boot_dfu + ramdisk_build + ramdisk_send + iproxy + cfw_install)
+# 4) Ramdisk + CFW (boot_dfu + ramdisk_build + ramdisk_send + iproxy + cfw_install / cfw_install_jb)
 # 5) First boot launch (`make boot`) with printed in-guest commands
 
 set -euo pipefail
@@ -26,6 +26,8 @@ BOOT_FIFO=""
 BOOT_FIFO_FD=""
 
 VM_DIR="${VM_DIR:-vm}"
+JB_MODE=0
+SKIP_PROJECT_SETUP=0
 
 die() {
   echo "[-] $*" >&2
@@ -261,18 +263,63 @@ stop_iproxy_2222() {
   IPROXY_PID=""
 }
 
-main() {
-  check_platform
-  install_brew_deps
-  ensure_python_linked
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --jb)
+        JB_MODE=1
+        ;;
+      --skip-project-setup)
+        SKIP_PROJECT_SETUP=1
+        ;;
+      -h|--help)
+        cat <<'EOF'
+Usage: setup_machine.sh [--jb] [--skip-project-setup]
 
-  run_make "Project setup" setup_libimobiledevice
-  run_make "Project setup" setup_venv
-  run_make "Project setup" build
+Options:
+  --jb                    Use jailbreak firmware patching + jailbreak CFW install.
+  --skip-project-setup    Skip setup_libimobiledevice/setup_venv/build stage.
+EOF
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $arg"
+        ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+
+  local fw_patch_target="fw_patch"
+  local cfw_install_target="cfw_install"
+
+  if [[ "$JB_MODE" -eq 1 ]]; then
+    fw_patch_target="fw_patch_jb"
+    cfw_install_target="cfw_install_jb"
+  fi
+
+  echo "[*] setup_machine mode: $([[ "$JB_MODE" -eq 1 ]] && echo "jailbreak" || echo "base"), project_setup=$([[ "$SKIP_PROJECT_SETUP" -eq 1 ]] && echo "skip" || echo "run")"
+
+  if [[ "$SKIP_PROJECT_SETUP" -eq 1 ]]; then
+    echo ""
+    echo "=== Project setup ==="
+    echo "[*] Skipping setup_libimobiledevice/setup_venv/build"
+  else
+    check_platform
+    install_brew_deps
+    ensure_python_linked
+
+    run_make "Project setup" setup_libimobiledevice
+    run_make "Project setup" setup_venv
+    run_make "Project setup" build
+  fi
 
   run_make "Firmware prep" vm_new
   run_make "Firmware prep" fw_prepare
-  run_make "Firmware patch" fw_patch
+  run_make "Firmware patch" "$fw_patch_target"
 
   echo ""
   echo "=== Restore phase ==="
@@ -292,7 +339,7 @@ main() {
 
   sleep 10 # for some reason there is a statistical faiure here if not enough time is given to initialization
 
-  run_make "CFW install" cfw_install
+  run_make "CFW install" "$cfw_install_target"
   stop_iproxy_2222
   stop_boot_dfu
 
