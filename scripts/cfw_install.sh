@@ -385,10 +385,30 @@ echo "[7/7] Installing LaunchDaemons..."
 # Install vphoned (vsock HID injector daemon)
 VPHONED_SRC="$SCRIPT_DIR/vphoned"
 VPHONED_BIN="$VPHONED_SRC/vphoned"
-if [[ ! -f "$VPHONED_BIN" ]] || [[ "$VPHONED_SRC/vphoned.m" -nt "$VPHONED_BIN" ]]; then
+VPHONED_SRCS=(
+    "$VPHONED_SRC/vphoned.m"
+    "$VPHONED_SRC/vphoned_protocol.m"
+    "$VPHONED_SRC/vphoned_hid.m"
+    "$VPHONED_SRC/vphoned_devmode.m"
+    "$VPHONED_SRC/vphoned_location.m"
+    "$VPHONED_SRC/vphoned_files.m"
+)
+needs_vphoned_build=0
+if [[ ! -f "$VPHONED_BIN" ]]; then
+    needs_vphoned_build=1
+else
+    for src in "${VPHONED_SRCS[@]}"; do
+        if [[ "$src" -nt "$VPHONED_BIN" ]]; then
+            needs_vphoned_build=1
+            break
+        fi
+    done
+fi
+if [[ "$needs_vphoned_build" == "1" ]]; then
     echo "  Building vphoned for arm64..."
     xcrun -sdk iphoneos clang -arch arm64 -Os -fobjc-arc \
-        -o "$VPHONED_BIN" "$VPHONED_SRC/vphoned.m" \
+        -I"$VPHONED_SRC" \
+        -o "$VPHONED_BIN" "${VPHONED_SRCS[@]}" \
         -framework Foundation
 fi
 cp "$VPHONED_BIN" "$TEMP_DIR/vphoned"
