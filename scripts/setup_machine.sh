@@ -27,6 +27,7 @@ BOOT_FIFO_FD=""
 
 VM_DIR="${VM_DIR:-vm}"
 JB_MODE=0
+SKIP_PROJECT_SETUP=0
 
 die() {
   echo "[-] $*" >&2
@@ -269,12 +270,16 @@ parse_args() {
       --jb)
         JB_MODE=1
         ;;
+      --skip-project-setup)
+        SKIP_PROJECT_SETUP=1
+        ;;
       -h|--help)
         cat <<'EOF'
-Usage: setup_machine.sh [--jb]
+Usage: setup_machine.sh [--jb] [--skip-project-setup]
 
 Options:
-  --jb    Use jailbreak firmware patching + jailbreak CFW install.
+  --jb                    Use jailbreak firmware patching + jailbreak CFW install.
+  --skip-project-setup    Skip setup_libimobiledevice/setup_venv/build stage.
 EOF
         exit 0
         ;;
@@ -296,15 +301,21 @@ main() {
     cfw_install_target="cfw_install_jb"
   fi
 
-  echo "[*] setup_machine mode: $([[ "$JB_MODE" -eq 1 ]] && echo "jailbreak" || echo "base")"
+  echo "[*] setup_machine mode: $([[ "$JB_MODE" -eq 1 ]] && echo "jailbreak" || echo "base"), project_setup=$([[ "$SKIP_PROJECT_SETUP" -eq 1 ]] && echo "skip" || echo "run")"
 
-  check_platform
-  install_brew_deps
-  ensure_python_linked
+  if [[ "$SKIP_PROJECT_SETUP" -eq 1 ]]; then
+    echo ""
+    echo "=== Project setup ==="
+    echo "[*] Skipping setup_libimobiledevice/setup_venv/build"
+  else
+    check_platform
+    install_brew_deps
+    ensure_python_linked
 
-  run_make "Project setup" setup_libimobiledevice
-  run_make "Project setup" setup_venv
-  run_make "Project setup" build
+    run_make "Project setup" setup_libimobiledevice
+    run_make "Project setup" setup_venv
+    run_make "Project setup" build
+  fi
 
   run_make "Firmware prep" vm_new
   run_make "Firmware prep" fw_prepare
