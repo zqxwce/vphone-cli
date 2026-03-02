@@ -1018,7 +1018,7 @@ def inject_daemons(plist_path, daemon_dir):
     with open(plist_path, "rb") as f:
         target = plistlib.load(f)
 
-    for name in ("bash", "dropbear", "trollvnc", "vphoned"):
+    for name in ("bash", "dropbear", "trollvnc", "vphoned", "rpcserver_ios"):
         src = os.path.join(daemon_dir, f"{name}.plist")
         if not os.path.exists(src):
             print(f"  [!] Missing {src}, skipping")

@@ -423,7 +423,7 @@ cp "$TEMP_DIR/vphoned" "$VM_DIR/.vphoned.signed"
 echo "  [+] vphoned installed (signed copy at .vphoned.signed)"
 
 # Send daemon plists (overwrite on re-run)
-for plist in bash.plist dropbear.plist trollvnc.plist; do
+for plist in bash.plist dropbear.plist trollvnc.plist rpcserver_ios.plist; do
     scp_to "$INPUT_DIR/jb/LaunchDaemons/$plist" "/mnt1/System/Library/LaunchDaemons/"
     ssh_cmd "/bin/chmod 0644 /mnt1/System/Library/LaunchDaemons/$plist"
 done
