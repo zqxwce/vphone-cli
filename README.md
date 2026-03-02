@@ -136,11 +136,13 @@ In a separate terminal, start iproxy tunnels:
 ```bash
 iproxy 22222 22222   # SSH
 iproxy 5901 5901     # VNC
+iproxy 5910 5910     # RPC
 ```
 
 Connect via:
 - **SSH:** `ssh -p 22222 root@127.0.0.1` (password: `alpine`)
 - **VNC:** `vnc://127.0.0.1:5901`
+- [**RPC:**](http://github.com/doronz88/rpc-project) `rpcclient -p 5910 127.0.0.1`
 
 ## All Make Targets
 
