@@ -11,6 +11,8 @@ class VPhoneMenuController {
     var onFilesPressed: (() -> Void)?
     var locationProvider: VPhoneLocationProvider?
     var locationMenuItem: NSMenuItem?
+    var screenRecorder: VPhoneScreenRecorder?
+    var recordingItem: NSMenuItem?
 
     init(keyHelper: VPhoneKeyHelper, control: VPhoneControl) {
         self.keyHelper = keyHelper
@@ -40,6 +42,7 @@ class VPhoneMenuController {
         mainMenu.addItem(buildTypeMenu())
         mainMenu.addItem(buildConnectMenu())
         mainMenu.addItem(buildLocationMenu())
+        mainMenu.addItem(buildRecordMenu())
 
         NSApp.mainMenu = mainMenu
     }
