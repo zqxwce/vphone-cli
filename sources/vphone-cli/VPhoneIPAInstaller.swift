@@ -1,29 +1,31 @@
-import AppKit
 import Foundation
 
 // MARK: - IPA Installer
 
-/// Host-side IPA installer. Re-signs with bundled ldid + signcert.p12,
-/// then installs via ideviceinstaller over USB/usbmuxd.
+/// Host-side IPA installer. Uses VPhoneSigner for re-signing,
+/// ideviceinstaller for USB installation via usbmuxd.
 @MainActor
 class VPhoneIPAInstaller {
-    private let macosDir: URL
-    private let resourcesDir: URL
+    let signer: VPhoneSigner
+    private let ideviceInstallerURL: URL
+    private let ideviceIdURL: URL
 
-    private var ldidURL: URL { macosDir.appendingPathComponent("ldid") }
-    private var ideviceInstallerURL: URL { macosDir.appendingPathComponent("ideviceinstaller") }
-    private var ideviceIdURL: URL { macosDir.appendingPathComponent("idevice_id") }
-    private var signcertURL: URL { resourcesDir.appendingPathComponent("signcert.p12") }
+    init?(signer: VPhoneSigner, bundle: Bundle = .main) {
+        guard let execURL = bundle.executableURL else { return nil }
+        let macosDir = execURL.deletingLastPathComponent()
 
-    init?() {
-        guard let execURL = Bundle.main.executableURL else { return nil }
-        macosDir = execURL.deletingLastPathComponent()
-        resourcesDir = macosDir
-            .deletingLastPathComponent()
-            .appendingPathComponent("Resources")
+        ideviceInstallerURL = macosDir.appendingPathComponent("ideviceinstaller")
+        ideviceIdURL = macosDir.appendingPathComponent("idevice_id")
+
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: ideviceInstallerURL.path),
+              fm.fileExists(atPath: ideviceIdURL.path)
+        else { return nil }
+
+        self.signer = signer
     }
 
-    // MARK: - Public API
+    // MARK: - Install
 
     /// Install an IPA. If `resign` is true, re-sign all Mach-O binaries
     /// preserving their original entitlements before installing.
@@ -48,7 +50,7 @@ class VPhoneIPAInstaller {
         }
 
         print("[ipa] installing \(installURL.lastPathComponent) to \(udid)...")
-        let result = try await run(
+        let result = try await signer.run(
             ideviceInstallerURL,
             arguments: ["-u", udid, "install", installURL.path]
         )
@@ -62,7 +64,7 @@ class VPhoneIPAInstaller {
     // MARK: - UDID Discovery
 
     private func getUDID() async throws -> String {
-        let result = try await run(ideviceIdURL, arguments: ["-l"])
+        let result = try await signer.run(ideviceIdURL, arguments: ["-l"])
         guard result.status == 0 else {
             throw IPAError.noDevice
         }
@@ -76,7 +78,7 @@ class VPhoneIPAInstaller {
         return first
     }
 
-    // MARK: - Re-sign
+    // MARK: - Re-sign IPA
 
     private func resignIPA(ipaURL: URL, tempDir: URL) async throws -> URL {
         let fm = FileManager.default
@@ -84,7 +86,7 @@ class VPhoneIPAInstaller {
 
         // Unzip
         print("[ipa] extracting \(ipaURL.lastPathComponent)...")
-        let unzip = try await run(
+        let unzip = try await signer.run(
             URL(fileURLWithPath: "/usr/bin/unzip"),
             arguments: ["-o", ipaURL.path, "-d", tempDir.path]
         )
@@ -93,11 +95,11 @@ class VPhoneIPAInstaller {
         }
 
         // Remove macOS resource fork files that break iOS installd
-        _ = try? await run(
+        _ = try? await signer.run(
             URL(fileURLWithPath: "/usr/bin/find"),
             arguments: [tempDir.path, "-name", "._*", "-delete"]
         )
-        _ = try? await run(
+        _ = try? await signer.run(
             URL(fileURLWithPath: "/usr/bin/find"),
             arguments: [tempDir.path, "-name", ".DS_Store", "-delete"]
         )
@@ -114,43 +116,21 @@ class VPhoneIPAInstaller {
         let appDir = payloadDir.appendingPathComponent(appName)
 
         // Walk and re-sign all Mach-O files
-        let machoFiles = findMachOFiles(in: appDir)
+        let machoFiles = signer.findMachOFiles(in: appDir)
         print("[ipa] re-signing \(machoFiles.count) Mach-O binaries...")
 
-        let ldid = ldidURL.path
-        let cert = signcertURL.path
-
         for file in machoFiles {
-            // Extract existing entitlements
-            let entsResult = try await run(
-                ldidURL,
-                arguments: ["-e", file.path]
-            )
-            let entsXML = entsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Build ldid arguments
-            var args: [String]
-            if !entsXML.isEmpty, entsXML.hasPrefix("<?xml") || entsXML.hasPrefix("<!DOCTYPE") {
-                // Write entitlements to temp file
-                let entsFile = tempDir.appendingPathComponent("ents-\(UUID().uuidString).plist")
-                try entsXML.write(to: entsFile, atomically: true, encoding: .utf8)
-                args = ["-S\(entsFile.path)", "-M", "-K\(cert)", file.path]
-            } else {
-                args = ["-S", "-M", "-K\(cert)", file.path]
-            }
-
-            let sign = try await run(ldidURL, arguments: args)
-            if sign.status != 0 {
-                print("[ipa] warning: failed to sign \(file.lastPathComponent): \(sign.stderr)")
-            } else {
-                print("[ipa] signed \(file.lastPathComponent)")
+            do {
+                try await signer.signFile(at: file, tempDir: tempDir)
+            } catch {
+                print("[ipa] warning: \(error)")
             }
         }
 
         // Re-zip (use zip from the temp dir so Payload/ is at the root)
         let outputIPA = tempDir.appendingPathComponent("resigned.ipa")
         print("[ipa] re-packaging...")
-        let zip = try await run(
+        let zip = try await signer.run(
             URL(fileURLWithPath: "/usr/bin/zip"),
             arguments: ["-r", "-y", outputIPA.path, "Payload"],
             currentDirectory: tempDir
@@ -160,86 +140,6 @@ class VPhoneIPAInstaller {
         }
 
         return outputIPA
-    }
-
-    // MARK: - Mach-O Detection
-
-    /// Recursively find all Mach-O files in a directory.
-    private func findMachOFiles(in directory: URL) -> [URL] {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        var results: [URL] = []
-        for case let url as URL in enumerator {
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                  values.isRegularFile == true,
-                  Self.isMachO(at: url)
-            else { continue }
-            results.append(url)
-        }
-        return results
-    }
-
-    private static func isMachO(at url: URL) -> Bool {
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? fh.close() }
-        guard let data = try? fh.read(upToCount: 4), data.count == 4 else { return false }
-        let magic = data.withUnsafeBytes { $0.load(as: UInt32.self) }
-        return magic == 0xFEEDFACF  // MH_MAGIC_64
-            || magic == 0xCFFAEDFE  // MH_CIGAM_64
-            || magic == 0xFEEDFACE  // MH_MAGIC
-            || magic == 0xCEFAEDFE  // MH_CIGAM
-            || magic == 0xCAFEBABE  // FAT_MAGIC
-            || magic == 0xBEBAFECA  // FAT_CIGAM
-    }
-
-    // MARK: - Process Runner
-
-    private struct ProcessResult: Sendable {
-        let stdout: String
-        let stderr: String
-        let status: Int32
-    }
-
-    /// Run an external process and return its output.
-    private func run(
-        _ executable: URL,
-        arguments: [String],
-        currentDirectory: URL? = nil
-    ) async throws -> ProcessResult {
-        let execPath = executable.path
-        let args = arguments
-        let dirPath = currentDirectory?.path
-
-        return try await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: execPath)
-            process.arguments = args
-            if let dirPath {
-                process.currentDirectoryURL = URL(fileURLWithPath: dirPath)
-            }
-
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            try process.run()
-            process.waitUntilExit()
-
-            let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-            return ProcessResult(
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? "",
-                status: process.terminationStatus
-            )
-        }.value
     }
 
     // MARK: - Errors

@@ -14,7 +14,9 @@ class VPhoneScreenRecorder {
     private var outputURL: URL?
     private weak var view: NSView?
 
-    var isRecording: Bool { writer?.status == .writing }
+    var isRecording: Bool {
+        writer?.status == .writing
+    }
 
     func startRecording(view: NSView) throws {
         guard !isRecording else { return }
@@ -55,10 +57,10 @@ class VPhoneScreenRecorder {
         writer.startSession(atSourceTime: .zero)
 
         self.writer = writer
-        self.videoInput = input
+        videoInput = input
         self.adaptor = adaptor
         self.view = view
-        self.frameCount = 0
+        frameCount = 0
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) {
             [weak self] _ in
@@ -81,10 +83,10 @@ class VPhoneScreenRecorder {
 
         let url = outputURL
         self.writer = nil
-        self.videoInput = nil
-        self.adaptor = nil
-        self.outputURL = nil
-        self.view = nil
+        videoInput = nil
+        adaptor = nil
+        outputURL = nil
+        view = nil
 
         if let url {
             print("[record] saved — \(url.path)")
