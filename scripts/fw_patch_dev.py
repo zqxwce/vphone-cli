@@ -17,13 +17,16 @@ from fw_patch import (
     patch_ibss,
     patch_kernelcache,
     patch_llb,
+    patch_txm,
     patch_component,
 )
-from patchers.txm_dev import TXMPatcher
+from patchers.txm_dev import TXMPatcher as TXMDevPatcher
 
 
 def patch_txm_dev(data):
-    p = TXMPatcher(data)
+    if not patch_txm(data):
+        return False
+    p = TXMDevPatcher(data)
     n = p.apply()
     print(f"  [+] {n} TXM dev patches applied dynamically")
     return n > 0

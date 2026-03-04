@@ -58,17 +58,13 @@ def _find_asm_pattern(data, asm_str):
 
 
 class TXMPatcher:
-    """Dynamic patcher for TXM images.
+    """Dev-only dynamic patcher for TXM images.
 
-    Patches:
-      1. Trustcache binary-search BL → mov x0, #0
-         (in the AMFI cert verification function identified by the
-          unique constant 0x20446 loaded into w19)
-      2. Selector24 hash extraction: nop LDR X1 + nop BL
-      3. get-task-allow entitlement check BL → mov x0, #1
-      4. Selector42|29: shellcode hook + manifest flag force
-      5. debugger entitlement check BL → mov w0, #1
-      6. developer-mode guard branch → nop
+    Patches (dev-specific only — base trustcache bypass is in txm.py):
+      1. get-task-allow entitlement check BL → mov x0, #1
+      2. Selector42|29: shellcode hook + manifest flag force
+      3. debugger entitlement check BL → mov w0, #1
+      4. developer-mode guard branch → nop
     """
 
     def __init__(self, data, verbose=True):
@@ -109,7 +105,6 @@ class TXMPatcher:
 
     def find_all(self):
         self.patches = []
-        self.patch_trustcache_bypass()
         self.patch_get_task_allow_force_true()
         self.patch_selector42_29_shellcode()
         self.patch_debugger_entitlement_force_true()

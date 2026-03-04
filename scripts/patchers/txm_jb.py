@@ -13,7 +13,11 @@ NOP = _asm("nop")
 
 
 class TXMJBPatcher(TXMDevPatcher):
-    """JB TXM patcher: dev TXM patches + selector24 extension."""
+    """JB-only TXM patcher: selector24 CS hash-extraction bypass.
+
+    Dev patches are applied separately by txm_dev.py; this class only
+    adds the JB-exclusive selector24 extension.
+    """
 
     def apply(self):
         self.find_all()
@@ -26,10 +30,6 @@ class TXMJBPatcher(TXMDevPatcher):
     def find_all(self):
         self.patches = []
         self.patch_selector24_hash_extraction_nop()
-        self.patch_get_task_allow_force_true()
-        self.patch_selector42_29_shellcode()
-        self.patch_debugger_entitlement_force_true()
-        self.patch_developer_mode_bypass()
         return self.patches
 
     def patch_selector24_hash_extraction_nop(self):
