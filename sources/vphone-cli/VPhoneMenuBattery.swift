@@ -67,7 +67,7 @@ extension VPhoneMenuController {
         var pastSeparator = false
         for mi in menu.items {
             if mi.isSeparatorItem { pastSeparator = true; continue }
-            if pastSeparator && mi.state == .on { return mi.tag }
+            if pastSeparator, mi.state == .on { return mi.tag }
         }
         return 1
     }

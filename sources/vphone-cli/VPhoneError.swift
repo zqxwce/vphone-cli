@@ -4,6 +4,7 @@ enum VPhoneError: Error, CustomStringConvertible {
     case hardwareModelNotSupported
     case romNotFound(String)
     case diskNotFound(String)
+    case invalidKernelDebugPort(Int)
 
     var description: String {
         switch self {
@@ -19,6 +20,8 @@ enum VPhoneError: Error, CustomStringConvertible {
             "ROM not found: \(p)"
         case let .diskNotFound(p):
             "Disk image not found: \(p)"
+        case let .invalidKernelDebugPort(port):
+            "Invalid kernel debug port: \(port) (expected 1...65535)"
         }
     }
 }
