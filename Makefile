@@ -222,7 +222,7 @@ restore:
 # Ramdisk
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: ramdisk_build ramdisk_send testing_ramdisk_build testing_ramdisk_send testing_do testing_do_save testing_kernel_patch testing_do_patch
+.PHONY: ramdisk_build ramdisk_send testing_ramdisk_build testing_ramdisk_send testing_do testing_do_save testing_kernel_patch testing_do_patch testing_c23_bisect
 
 ramdisk_build:
 	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
@@ -250,6 +250,9 @@ testing_do_patch:
 
 testing_batch:
 	zsh "$(CURDIR)/$(SCRIPTS)/testing_batch.sh" $(PATCHES)
+
+testing_c23_bisect:
+	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/testing_c23_bisect.py" . $(VARIANT)
 
 # ═══════════════════════════════════════════════════════════════════
 # CFW

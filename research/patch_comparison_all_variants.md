@@ -92,7 +92,7 @@ Regular and Dev share the same 25 base kernel patches. JB adds 34 additional pat
 | 27  | Shellcode + branch           | `_cred_label_update_execve`          | Set cs_flags (platform+entitlements)       |    —    |  —  |  Y  |
 | 28  | `cmp w0,w0`                  | `_postValidation` (additional)       | Force validation pass                      |    —    |  —  |  Y  |
 | 29  | Shellcode + branch           | `_syscallmask_apply_to_proc`         | Patch zalloc_ro_mut for syscall mask       |    —    |  —  |  Y  |
-| 30  | Shellcode + ops redirect     | `_hook_cred_label_update_execve`     | vnode_getattr ownership + suid propagation |    —    |  —  |  Y  |
+| 30  | Inline trampoline + cave     | `_hook_cred_label_update_execve`     | vnode_getattr ownership + suid propagation |    —    |  —  |  Y  |
 | 31  | `mov x0,#0; ret` (20+ hooks) | Sandbox MACF ops (extended)          | Stub remaining 20+ sandbox hooks           |    —    |  —  |  Y  |
 | 32  | `cmp xzr,xzr`                | `_task_conversion_eval_internal`     | Allow task conversion                      |    —    |  —  |  Y  |
 | 33  | `mov x0,#0; ret`             | `_proc_security_policy`              | Bypass security policy                     |    —    |  —  |  Y  |
@@ -272,8 +272,10 @@ with capstone semantic matching and keystone-generated patch bytes only:
 
 21. `_cred_label_update_execve` cs_flags shellcode
 22. `_syscallmask_apply_to_proc` filter mask shellcode
-23. `_hook_cred_label_update_execve` ops table + vnode_getattr shellcode
+23. `_hook_cred_label_update_execve` inline trampoline + vnode_getattr shellcode
        - Code cave restricted to __TEXT_EXEC only (__PRELINK_TEXT excluded due to KTRR)
+       - Inline trampoline (B cave at function entry) replaces ops table pointer rewrite
+       - Ops table pointer modification breaks chained fixup integrity → PAC failures
 24. `kcall10` syscall 439 replacement shellcode
 
 ## Cross-Version Dynamic Snapshot
