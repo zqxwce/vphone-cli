@@ -57,11 +57,13 @@ class KernelJBPatcher(
     def find_all(self):
         self.patches = []
 
+        # Commented patches are broken to boot into panic.
+
         # Group A: Existing patches
-        # self.patch_amfi_cdhash_in_trustcache()          # A1
-        # self.patch_amfi_execve_kill_path()              # A2
-        # self.patch_task_conversion_eval_internal()      # A3
-        # self.patch_sandbox_hooks_extended()             # A4
+        self.patch_amfi_cdhash_in_trustcache()          # A1
+        # self.patch_amfi_execve_kill_path()              # A2 (PANIC)
+        self.patch_task_conversion_eval_internal()      # A3
+        self.patch_sandbox_hooks_extended()             # A4
 
         # Group B: Simple patches (string-anchored / pattern-matched)
         # self.patch_post_validation_additional()         # B5
