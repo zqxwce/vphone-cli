@@ -34,6 +34,8 @@ SSH_PASS="alpine"
 SSH_USER="root"
 SSH_HOST="localhost"
 SSH_RETRY="${SSH_RETRY:-3}"
+CFW_SSH_READY_TIMEOUT="${CFW_SSH_READY_TIMEOUT:-60}"
+CFW_SSH_READY_INTERVAL="${CFW_SSH_READY_INTERVAL:-2}"
 SSHPASS_BIN=""
 SSH_OPTS=(
     -o StrictHostKeyChecking=no
@@ -57,6 +59,38 @@ check_prerequisites() {
         die "Missing required tools: ${missing[*]}. Run: make setup_tools"
     fi
     SSHPASS_BIN="$(command -v sshpass)"
+}
+
+wait_for_device_ssh_ready() {
+    local timeout interval elapsed
+    timeout="$CFW_SSH_READY_TIMEOUT"
+    interval="$CFW_SSH_READY_INTERVAL"
+    elapsed=0
+
+    [[ "$timeout" == <-> ]] || die "CFW_SSH_READY_TIMEOUT must be an integer (seconds)"
+    [[ "$interval" == <-> ]] || die "CFW_SSH_READY_INTERVAL must be an integer (seconds)"
+    (( timeout > 0 )) || die "CFW_SSH_READY_TIMEOUT must be > 0"
+    (( interval > 0 )) || die "CFW_SSH_READY_INTERVAL must be > 0"
+
+    echo "[*] Waiting for ramdisk SSH on ${SSH_USER}@${SSH_HOST}:${SSH_PORT} (timeout=${timeout}s)..."
+    while (( elapsed < timeout )); do
+        if "$SSHPASS_BIN" -p "$SSH_PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password \
+            -o ConnectTimeout=5 \
+            -q \
+            -p "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST" "echo ready" >/dev/null 2>&1
+        then
+            echo "[+] Ramdisk SSH is reachable"
+            return
+        fi
+        sleep "$interval"
+        (( elapsed += interval ))
+    done
+
+    die "Ramdisk SSH is not reachable on ${SSH_HOST}:${SSH_PORT}. Make sure ramdisk is running (make ramdisk_send) and iproxy is forwarding ${SSH_PORT}->22."
 }
 
 _sshpass() {
@@ -164,6 +198,7 @@ setup_cfw_input
 INPUT_DIR="$VM_DIR/$CFW_INPUT"
 echo "[+] Input resources: $INPUT_DIR"
 check_prerequisites
+wait_for_device_ssh_ready
 
 mkdir -p "$TEMP_DIR"
 
