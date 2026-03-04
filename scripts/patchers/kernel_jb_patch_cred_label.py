@@ -1,9 +1,117 @@
 """Mixin: KernelJBPatchCredLabelMixin."""
 
-from .kernel_jb_base import asm, _rd32, RET
+from .kernel_jb_base import asm, _rd32
 
 
 class KernelJBPatchCredLabelMixin:
+    _RET_INSNS = (0xD65F0FFF, 0xD65F0BFF, 0xD65F03C0)
+
+    def _is_cred_label_execve_candidate(self, func_off, anchor_refs):
+        """Validate candidate function shape for _cred_label_update_execve."""
+        func_end = self._find_func_end(func_off, 0x1000)
+        if func_end - func_off < 0x200:
+            return False, 0, func_end
+
+        anchor_hits = sum(1 for r in anchor_refs if func_off <= r < func_end)
+        if anchor_hits == 0:
+            return False, 0, func_end
+
+        has_arg9_load = False
+        has_flags_load = False
+        has_flags_store = False
+
+        for off in range(func_off, func_end, 4):
+            d = self._disas_at(off)
+            if not d:
+                continue
+            i = d[0]
+            op = i.op_str.replace(" ", "")
+            if i.mnemonic == "ldr" and op.startswith("x26,[x29"):
+                has_arg9_load = True
+                break
+
+        for off in range(func_off, func_end, 4):
+            d = self._disas_at(off)
+            if not d:
+                continue
+            i = d[0]
+            op = i.op_str.replace(" ", "")
+            if i.mnemonic == "ldr" and op.startswith("w") and ",[x26" in op:
+                has_flags_load = True
+            elif i.mnemonic == "str" and op.startswith("w") and ",[x26" in op:
+                has_flags_store = True
+            if has_flags_load and has_flags_store:
+                break
+
+        ok = has_arg9_load and has_flags_load and has_flags_store
+        score = anchor_hits * 10 + (1 if has_arg9_load else 0) + (1 if has_flags_load else 0) + (1 if has_flags_store else 0)
+        return ok, score, func_end
+
+    def _find_cred_label_execve_func(self):
+        """Locate _cred_label_update_execve by AMFI kill-path string cluster."""
+        anchor_strings = (
+            b"AMFI: hook..execve() killing",
+            b"Attempt to execute completely unsigned code",
+            b"Attempt to execute a Legacy VPN Plugin",
+            b"dyld signature cannot be verified",
+        )
+
+        anchor_refs = set()
+        candidates = set()
+        s, e = self.amfi_text
+
+        for anchor in anchor_strings:
+            str_off = self.find_string(anchor)
+            if str_off < 0:
+                continue
+            refs = self.find_string_refs(str_off, s, e)
+            if not refs:
+                refs = self.find_string_refs(str_off)
+            for adrp_off, _, _ in refs:
+                anchor_refs.add(adrp_off)
+                func_off = self.find_function_start(adrp_off)
+                if func_off >= 0 and s <= func_off < e:
+                    candidates.add(func_off)
+
+        best_func = -1
+        best_score = -1
+        for func_off in sorted(candidates):
+            ok, score, _ = self._is_cred_label_execve_candidate(func_off, anchor_refs)
+            if ok and score > best_score:
+                best_score = score
+                best_func = func_off
+
+        return best_func
+
+    def _find_cred_label_return_site(self, func_off):
+        """Pick a return site with full epilogue restore (SP/frame restored)."""
+        func_end = self._find_func_end(func_off, 0x1000)
+        fallback = -1
+        for off in range(func_end - 4, func_off, -4):
+            val = _rd32(self.raw, off)
+            if val not in self._RET_INSNS:
+                continue
+            if fallback < 0:
+                fallback = off
+
+            saw_add_sp = False
+            saw_ldp_fp = False
+            for prev in range(max(func_off, off - 0x24), off, 4):
+                d = self._disas_at(prev)
+                if not d:
+                    continue
+                i = d[0]
+                op = i.op_str.replace(" ", "")
+                if i.mnemonic == "add" and op.startswith("sp,sp,#"):
+                    saw_add_sp = True
+                elif i.mnemonic == "ldp" and op.startswith("x29,x30,[sp"):
+                    saw_ldp_fp = True
+
+            if saw_add_sp and saw_ldp_fp:
+                return off
+
+        return fallback
+
     def patch_cred_label_update_execve(self):
         """Redirect _cred_label_update_execve to shellcode that sets cs_flags.
 
@@ -13,66 +121,18 @@ class KernelJBPatchCredLabelMixin:
         """
         self._log("\n[JB] _cred_label_update_execve: shellcode (cs_flags)")
 
-        # Find the function via AMFI string reference
         func_off = -1
 
-        # Try symbol
+        # Try symbol first, but still validate shape.
         for sym, off in self.symbols.items():
             if "cred_label_update_execve" in sym and "hook" not in sym:
-                func_off = off
+                ok, _, _ = self._is_cred_label_execve_candidate(off, set([off]))
+                if ok:
+                    func_off = off
                 break
 
         if func_off < 0:
-            # String anchor: the function is near execve-related AMFI code.
-            # Look for the function that contains the AMFI string ref and
-            # then find _cred_label_update_execve through BL targets.
-            str_off = self.find_string(b"AMFI: code signature validation failed")
-            if str_off >= 0:
-                refs = self.find_string_refs(str_off, *self.amfi_text)
-                if refs:
-                    caller = self.find_function_start(refs[0][0])
-                    if caller >= 0:
-                        # Walk through the AMFI text section to find functions
-                        # that have a RETAB at the end and take many arguments
-                        # The _cred_label_update_execve has many args and a
-                        # distinctive prologue.
-                        pass
-
-        if func_off < 0:
-            # Alternative: search AMFI text for functions that match the pattern
-            # of _cred_label_update_execve (long prologue, many saved regs, RETAB)
-            # Look for the specific pattern: mov xN, x2 in early prologue
-            # (saves the vnode arg) followed by stp xzr,xzr pattern
-            s, e = self.amfi_text
-            # Search for PACIBSP functions in AMFI that are BL targets from
-            # the execve kill path area
-            str_off = self.find_string(b"AMFI: hook..execve() killing")
-            if str_off < 0:
-                str_off = self.find_string(b"execve() killing")
-            if str_off >= 0:
-                refs = self.find_string_refs(str_off, s, e)
-                if not refs:
-                    refs = self.find_string_refs(str_off)
-                if refs:
-                    kill_func = self.find_function_start(refs[0][0])
-                    if kill_func >= 0:
-                        kill_end = self._find_func_end(kill_func, 0x800)
-                        # The kill function ends with RETAB. The next function
-                        # after it should be close to _cred_label_update_execve.
-                        # Actually, _cred_label_update_execve is typically the
-                        # function BEFORE the kill function.
-                        # Search backward from kill_func for a RETAB/RET
-                        for back in range(kill_func - 4, max(kill_func - 0x400, s), -4):
-                            val = _rd32(self.raw, back)
-                            if val in (0xD65F0FFF, 0xD65F0BFF, 0xD65F03C0):
-                                # Found end of previous function.
-                                # The function we want starts at the next PACIBSP before back.
-                                for scan in range(back - 4, max(back - 0x400, s), -4):
-                                    d = self._disas_at(scan)
-                                    if d and d[0].mnemonic == "pacibsp":
-                                        func_off = scan
-                                        break
-                                break
+            func_off = self._find_cred_label_execve_func()
 
         if func_off < 0:
             self._log("  [-] function not found, skipping shellcode patch")
@@ -100,14 +160,7 @@ class KernelJBPatchCredLabelMixin:
             + bytes([0xFF, 0x0F, 0x5F, 0xD6])  # RETAB
         )
 
-        # Find the return site in the function (last RETAB)
-        func_end = self._find_func_end(func_off, 0x200)
-        ret_off = -1
-        for off in range(func_end - 4, func_off, -4):
-            val = _rd32(self.raw, off)
-            if val in (0xD65F0FFF, 0xD65F0BFF, 0xD65F03C0):
-                ret_off = off
-                break
+        ret_off = self._find_cred_label_return_site(func_off)
         if ret_off < 0:
             self._log("  [-] function return not found")
             return False

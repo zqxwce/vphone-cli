@@ -1,13 +1,15 @@
 """Mixin: KernelJBPatchVmFaultMixin."""
 
-from .kernel_jb_base import ARM64_OP_REG, ARM64_REG_W0, NOP
+from .kernel_jb_base import NOP
 
 
 class KernelJBPatchVmFaultMixin:
     def patch_vm_fault_enter_prepare(self):
         """NOP a PMAP check in _vm_fault_enter_prepare.
-        Find BL to a rarely-called function followed within 4 instructions
-        by TBZ/TBNZ on w0.
+        Strict mode:
+        - Resolve vm_fault_enter_prepare function via symbol/string anchor.
+        - In-function only (no global fallback scan).
+        - Require a unique BL site with post-call flag test shape.
         """
         self._log("\n[JB] _vm_fault_enter_prepare: NOP")
 
@@ -15,46 +17,55 @@ class KernelJBPatchVmFaultMixin:
         foff = self._resolve_symbol("_vm_fault_enter_prepare")
         if foff >= 0:
             func_end = self._find_func_end(foff, 0x2000)
-            result = self._find_bl_tbz_pmap(foff + 0x100, func_end)
+            result = self._find_bl_tbz_pmap(foff, func_end)
             if result:
                 self.emit(result, NOP, "NOP [_vm_fault_enter_prepare]")
                 return True
 
         # String anchor: all refs to "vm_fault_enter_prepare"
         str_off = self.find_string(b"vm_fault_enter_prepare")
+        candidate_sites = set()
         if str_off >= 0:
-            refs = self.find_string_refs(str_off)
-            for adrp_off, _, _ in refs:
-                func_start = self.find_function_start(adrp_off)
-                if func_start < 0:
-                    continue
+            refs = self.find_string_refs(str_off, *self.kern_text)
+            funcs = sorted(
+                {
+                    self.find_function_start(adrp_off)
+                    for adrp_off, _, _ in refs
+                    if self.find_function_start(adrp_off) >= 0
+                }
+            )
+            for func_start in funcs:
                 func_end = self._find_func_end(func_start, 0x4000)
-                result = self._find_bl_tbz_pmap(func_start + 0x100, func_end)
-                if result:
-                    self.emit(result, NOP, "NOP [_vm_fault_enter_prepare]")
-                    return True
+                result = self._find_bl_tbz_pmap(func_start, func_end)
+                if result is not None:
+                    candidate_sites.add(result)
 
-        # Broader: scan all kern_text for BL to rarely-called func + TBZ w0
-        # in a large function (>0x2000 bytes)
-        ks, ke = self.kern_text
-        for off in range(ks, ke - 16, 4):
-            result = self._find_bl_tbz_pmap(off, min(off + 16, ke))
-            if result:
-                # Verify it's in a large function
-                func_start = self.find_function_start(result)
-                if func_start >= 0:
-                    func_end = self._find_func_end(func_start, 0x4000)
-                    if func_end - func_start > 0x2000:
-                        self.emit(result, NOP, "NOP [_vm_fault_enter_prepare]")
-                        return True
+        if len(candidate_sites) == 1:
+            result = next(iter(candidate_sites))
+            self.emit(result, NOP, "NOP [_vm_fault_enter_prepare]")
+            return True
+        if len(candidate_sites) > 1:
+            self._log(
+                "  [-] ambiguous vm_fault_enter_prepare candidates: "
+                + ", ".join(f"0x{x:X}" for x in sorted(candidate_sites))
+            )
+            return False
 
         self._log("  [-] patch site not found")
         return False
 
     def _find_bl_tbz_pmap(self, start, end):
-        """Find BL to a rarely-called function followed within 4 insns by TBZ/TBNZ w0.
-        Returns the BL offset, or None."""
-        for off in range(start, end - 4, 4):
+        """Find strict BL site used by vm_fault_enter_prepare guard path.
+
+        Expected local shape:
+          BL target(rare)
+          LDRB wN, [xM, #0x2c]
+          ... TBZ/TBNZ wN, #bit, <forward>
+        Returns BL offset when the match is unique inside [start, end).
+        """
+        hits = []
+        scan_start = max(start + 0x80, start)
+        for off in range(scan_start, end - 0x10, 4):
             d0 = self._disas_at(off)
             if not d0 or d0[0].mnemonic != "bl":
                 continue
@@ -62,16 +73,30 @@ class KernelJBPatchVmFaultMixin:
             n_callers = len(self.bl_callers.get(bl_target, []))
             if n_callers >= 20:
                 continue
-            # Check next 4 instructions for TBZ/TBNZ on w0
-            for delta in range(1, 5):
-                d1 = self._disas_at(off + delta * 4)
-                if not d1:
-                    break
-                i1 = d1[0]
-                if i1.mnemonic in ("tbnz", "tbz") and len(i1.operands) >= 2:
-                    if (
-                        i1.operands[0].type == ARM64_OP_REG
-                        and i1.operands[0].reg == ARM64_REG_W0
-                    ):
-                        return off
+
+            d1 = self._disas_at(off + 4)
+            if not d1 or d1[0].mnemonic != "ldrb":
+                continue
+            op1 = d1[0].op_str
+            if "#0x2c" not in op1 or not op1.startswith("w"):
+                continue
+
+            reg = op1.split(",", 1)[0].strip()
+            matched = False
+            for delta in (8, 12, 16):
+                d2 = self._disas_at(off + delta)
+                if not d2:
+                    continue
+                i2 = d2[0]
+                if i2.mnemonic not in ("tbz", "tbnz"):
+                    continue
+                if not i2.op_str.startswith(f"{reg},"):
+                    continue
+                matched = True
+                break
+            if matched:
+                hits.append(off)
+
+        if len(hits) == 1:
+            return hits[0]
         return None

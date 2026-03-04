@@ -29,22 +29,29 @@ class KernelJBPatchBsdInitAuthMixin:
 
         # Pattern search: ldr x0, [xN, #0x2b8]; cbz x0; bl
         ks, ke = self.kern_text
-        candidates = self._collect_auth_bl_candidates(ks, ke)
+        rootvp_func = self._func_for_rootvp_anchor()
+        if rootvp_func is None:
+            self._log("  [-] rootvp anchor function not found")
+            return False
+
+        # Fast path: scan a narrow window around rootvp/bsd_init region first.
+        near_start = max(ks, rootvp_func - 0x200000)
+        near_end = min(ke, rootvp_func + 0x400000)
+        candidates = self._collect_auth_bl_candidates(near_start, near_end)
+        if not candidates:
+            # Fallback to full kernel text only when needed.
+            candidates = self._collect_auth_bl_candidates(ks, ke)
 
         if not candidates:
             self._log("  [-] ldr+cbz+bl pattern not found")
             return False
 
-        # Filter to kern_text range (exclude kexts)
-        kern_candidates = [c for c in candidates if ks <= c < ke]
-        if not kern_candidates:
-            kern_candidates = candidates
+        bl_off = self._select_bsd_init_auth_candidate(candidates, rootvp_func)
+        if bl_off is None:
+            self._log("  [-] no safe _bsd_init auth candidate (fail-closed)")
+            return False
 
-        # Pick the last one in the kernel (bsd_init is typically late in boot)
-        bl_off = kern_candidates[-1]
-        self._log(
-            f"  [+] auth BL at 0x{bl_off:X} ({len(kern_candidates)} kern candidates)"
-        )
+        self._log(f"  [+] auth BL at 0x{bl_off:X} (strict candidate)")
         self.emit(bl_off, MOV_X0_0, "mov x0,#0 [_bsd_init auth]")
         return True
 
@@ -85,3 +92,60 @@ class KernelJBPatchBsdInitAuthMixin:
 
             out.append(off + 8)
         return out
+
+    def _select_bsd_init_auth_candidate(self, candidates, rootvp_func):
+        """Select a safe candidate in core kernel code.
+
+        Heuristics (strict, fail-closed):
+        - Stay near the core bsd_init region (anchored by rootvp panic string xref).
+        - Require function context to reference `/dev/null` (boot-path fingerprint).
+        - Prefer lower-caller-count function entries.
+        """
+        # Keep candidates in the same broad kernel neighborhood.
+        core_limit = rootvp_func + 0x400000
+        nearby = [off for off in candidates if off < core_limit]
+        if not nearby:
+            return None
+
+        ranked = []
+        for bl_off in nearby:
+            fn = self.find_function_start(bl_off)
+            if fn < 0:
+                continue
+            fn_end = self._find_func_end(fn, 0x4000)
+            if not self._function_has_string(fn, fn_end, b"/dev/null"):
+                continue
+            callers = len(self.bl_callers.get(fn, []))
+            ranked.append((callers, bl_off, fn))
+
+        if not ranked:
+            return None
+
+        ranked.sort()
+        best_callers, best_off, _ = ranked[0]
+        # Ambiguous: multiple same-rank hits.
+        same = [item for item in ranked if item[0] == best_callers]
+        if len(same) > 1:
+            return None
+        return best_off
+
+    def _func_for_rootvp_anchor(self):
+        needle = b"rootvp not authenticated after mounting @%s:%d"
+        str_off = self.find_string(needle)
+        if str_off < 0:
+            return None
+        refs = self.find_string_refs(str_off, *self.kern_text)
+        if not refs:
+            return None
+        fn = self.find_function_start(refs[0][0])
+        return fn if fn >= 0 else None
+
+    def _function_has_string(self, func_start, func_end, needle):
+        str_off = self.find_string(needle)
+        if str_off < 0:
+            return False
+        refs = self.find_string_refs(str_off, *self.kern_text)
+        for adrp_off, _, _ in refs:
+            if func_start <= adrp_off < func_end:
+                return True
+        return False

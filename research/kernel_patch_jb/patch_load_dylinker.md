@@ -4,23 +4,26 @@
 - Source: `scripts/patchers/kernel_jb_patch_load_dylinker.py`.
 - Locator strategy:
   1. Try symbol `_load_dylinker`.
-  2. Otherwise find function with repeated PAC triplets:
-     - `tst xN, #0x40000000000000`
-     - `b.eq ...`
-     - `movk xN, #0xc8a2`
-     - repeated >= 3 times, usually in a function with no direct BL callers.
+  2. Fallback anchor: locate function referencing string `"/usr/lib/dyld"` in kernel `__text`.
+  3. In that function, find gate sequence:
+     - `bl <check>`
+     - `cbz w0, <allow>`
+     - `mov w0, #2` (deny path)
 - Patch action:
-  - Replace the **last** `tst` with unconditional branch to the `b.eq` target.
+  - Replace the `bl <check>` with unconditional `b <allow>`.
 
 ## Expected outcome
-- Always skip selected PAC re-sign/check path in chained-fixup rebase flow.
+- Skip dyld policy rejection branch and force allow path for this gate.
 
 ## Target
-- PAC decision branch in `_load_dylinker`-related fixup path.
+- Dyld policy gate in load-dylinker path.
 
 ## IDA MCP evidence (current state)
-- No direct stable string/symbol anchor for this stripped build.
-- The patch design is pattern-based and function-profile-based; exact static site remains pending additional scripted narrowing.
+- `"/usr/lib/dyld"` anchor: `0xfffffe00070899e3`.
+- Anchor function: `0xfffffe000805699c` (`foff 0x105299C`).
+- Patch site: `0xfffffe0008056a28` (`foff 0x1052A28`):
+  - before: `bl ... ; cbz w0, <allow> ; mov w0, #2`
+  - after: `b <allow>`
 
 ## Risk
-- PAC bypass in dylinker/fixup path is security-sensitive and can alter pointer-auth assumptions globally.
+- Dyld policy bypass is security-sensitive and can widen executable loading surface.

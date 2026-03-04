@@ -10,6 +10,7 @@
      - repeated `ldr wN, [xN, #0x490]` + `str wN, [xN, #0xc]`,
      - `movk ..., #0xc8a2`,
      - BL to high-caller target.
+  3. If multiple candidates match, prefer function(s) that have chained pointer references from `__DATA_CONST`/`__DATA` (trap-table style reference), and reject ambiguous ties.
 - Patch action:
   - NOP the second `ldr ... #0x490` (target proc security copy).
 
@@ -20,8 +21,9 @@
 - Security-copy instruction sequence in `_task_for_pid` internals.
 
 ## IDA MCP evidence (current state)
-- Relevant policy strings exist (`task_for_pid-allow`, AMFI task_for_pid log), but those resolve mainly to AMFI policy handlers, not directly to the trap implementation this patch targets.
-- This patch relies on multi-feature structural matching rather than a single anchor; exact final patch offset is pending deeper automated scan.
+- Research kernel selected function: `0xfffffe0008003718` (`foff 0xFFF718`), patch site `0xfffffe000800383c` (`foff 0xFFF83C`).
+- Secondary structural match also exists at `0xfffffe000800477c` (`foff 0x100077C`) but has no data-pointer table refs and is rejected.
+- The selected function has a data xref at `0xfffffe00077363a8`, consistent with indirect dispatch table usage.
 
 ## Risk
 - task_for_pid hardening bypass is high-impact and can enable broader task-port access.

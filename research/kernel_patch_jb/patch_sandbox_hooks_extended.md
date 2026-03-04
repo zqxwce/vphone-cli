@@ -22,6 +22,28 @@
 - Xref points to the policy-structure region: `0xfffffe0007a58430` (data reference)
 - Script logic uses this structure to recover the `ops` table and patch hook entries in bulk (not a single-address patch).
 
-## 5) Risks and Side Effects
+## 5) 2026-03-05 Re-Validation (Research Kernel + IDA)
+- Validation target:
+  - runtime patch test input: `vm/iPhone17,3_26.1_23B85_Restore/kernelcache.research.vphone600`
+  - IDA DB: `/Users/qaq/Desktop/kernelcache.research.vphone600.macho`
+- `mac_policy_conf` resolution (current build):
+  - `mac_policy_conf` at `0xfffffe0007a58428` (foff `0xA54428`)
+  - `mpc_ops` pointer -> `0xfffffe0007a58488` (foff `0xA54488`)
+- Current method result (`patch_sandbox_hooks_extended`):
+  - **26 hook entries resolved**
+  - **52 low-level writes** (`mov x0,#0` + `ret` for each hook)
+- Entry quality checks:
+  - all 26 decoded `ops[index]` addresses land inside Sandbox text range
+  - all 26 entries begin at valid function entries (`pacibsp`, then prologue `stp ...`)
+  - sample entries:
+    - idx 245 `vnode_check_getattr` -> `0xfffffe00093a4020`
+    - idx 258 `vnode_check_exec` -> `0xfffffe00093bc054`
+    - idx 316 `vnode_check_fsgetpath` -> `0xfffffe000939ea28`
+
+## 6) Risks and Side Effects
 - Very wide coverage, with a high chance of cross-subsystem side effects (filesystem, process, exec paths).
 - If indices do not match the target build, the patch may hit wrong functions and trigger panic.
+
+## 7) Assessment
+- On `kernelcache.research.vphone600`, A4 index-to-function mapping is structurally consistent (valid `mac_policy_conf` -> `mpc_ops` -> function-entry targets).
+- Confidence: **high** for current build mapping correctness.

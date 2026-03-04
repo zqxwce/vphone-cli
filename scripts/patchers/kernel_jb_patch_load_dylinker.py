@@ -1,106 +1,92 @@
 """Mixin: KernelJBPatchLoadDylinkerMixin."""
 
-from .kernel_jb_base import NOP
-
 
 class KernelJBPatchLoadDylinkerMixin:
     def patch_load_dylinker(self):
-        """Bypass PAC auth check in Mach-O chained fixup rebase code.
+        """Bypass load_dylinker policy gate in the dyld path.
 
-        The kernel's chained fixup pointer rebase function contains PAC
-        authentication triplets: TST xN, #high; B.EQ skip; MOVK xN, #0xc8a2.
-        This function has 3+ such triplets and 0 BL callers (indirect call).
-
-        Find the function and replace the LAST TST with an unconditional
-        branch to the B.EQ target (always skip PAC re-signing).
+        Strict selector:
+        1. Anchor function by '/usr/lib/dyld' string reference.
+        2. Inside that function, find BL <check>; CBZ W0, <allow>.
+        3. Replace BL with unconditional B to <allow>.
         """
-        self._log("\n[JB] _load_dylinker: PAC rebase bypass")
+        self._log("\n[JB] _load_dylinker: skip dyld policy check")
 
         # Try symbol first
         foff = self._resolve_symbol("_load_dylinker")
         if foff >= 0:
             func_end = self._find_func_end(foff, 0x2000)
-            result = self._find_tst_pac_triplet(foff, func_end)
+            result = self._find_bl_cbz_gate(foff, func_end)
             if result:
-                tst_off, beq_target = result
-                b_bytes = self._encode_b(tst_off, beq_target)
+                bl_off, allow_target = result
+                b_bytes = self._encode_b(bl_off, allow_target)
                 if b_bytes:
                     self.emit(
-                        tst_off,
+                        bl_off,
                         b_bytes,
-                        f"b #0x{beq_target - tst_off:X} [_load_dylinker]",
+                        f"b #0x{allow_target - bl_off:X} [_load_dylinker]",
                     )
                     return True
 
-        # Pattern search: find functions with 3+ TST+B.EQ+MOVK(#0xc8a2)
-        # triplets and 0 BL callers. This is the chained fixup rebase code.
-        ks, ke = self.kern_text
-        off = ks
-        while off < ke - 4:
-            d = self._disas_at(off)
-            if not d or d[0].mnemonic != "pacibsp":
-                off += 4
+        # Fallback: strict dyld-anchor function profile.
+        str_off = self.find_string(b"/usr/lib/dyld")
+        if str_off < 0:
+            self._log("  [-] '/usr/lib/dyld' string not found")
+            return False
+
+        kstart, kend = self._get_kernel_text_range()
+        refs = self.find_string_refs(str_off, kstart, kend)
+        if not refs:
+            refs = self.find_string_refs(str_off)
+        if not refs:
+            self._log("  [-] no code refs to '/usr/lib/dyld'")
+            return False
+
+        for adrp_off, _, _ in refs:
+            func_start = self.find_function_start(adrp_off)
+            if func_start < 0:
                 continue
-            func_start = off
-            func_end = self._find_func_end(func_start, 0x2000)
-
-            # Must have 0 BL callers (indirect call via function pointer)
-            if self.bl_callers.get(func_start, []):
-                off = func_end
+            func_end = self._find_func_end(func_start, 0x1200)
+            result = self._find_bl_cbz_gate(func_start, func_end)
+            if not result:
                 continue
+            bl_off, allow_target = result
+            b_bytes = self._encode_b(bl_off, allow_target)
+            if not b_bytes:
+                continue
+            self._log(
+                f"  [+] dyld anchor func at 0x{func_start:X}, "
+                f"patch BL at 0x{bl_off:X}"
+            )
+            self.emit(
+                bl_off,
+                b_bytes,
+                f"b #0x{allow_target - bl_off:X} [_load_dylinker policy bypass]",
+            )
+            return True
 
-            # Count TST+B.EQ+MOVK(#0xc8a2) triplets
-            triplets = []
-            for o in range(func_start, func_end - 8, 4):
-                d3 = self._disas_at(o, 3)
-                if len(d3) < 3:
-                    continue
-                i0, i1, i2 = d3[0], d3[1], d3[2]
-                if (
-                    i0.mnemonic == "tst"
-                    and "40000000000000" in i0.op_str
-                    and i1.mnemonic == "b.eq"
-                    and i2.mnemonic == "movk"
-                    and "#0xc8a2" in i2.op_str
-                ):
-                    beq_target = i1.operands[-1].imm
-                    triplets.append((o, beq_target))
-
-            if len(triplets) >= 3:
-                # Patch the last triplet (deepest in the function)
-                tst_off, beq_target = triplets[-1]
-                b_bytes = self._encode_b(tst_off, beq_target)
-                if b_bytes:
-                    self._log(
-                        f"  [+] rebase func at 0x{func_start:X}, "
-                        f"patch TST at 0x{tst_off:X}"
-                    )
-                    self.emit(
-                        tst_off,
-                        b_bytes,
-                        f"b #0x{beq_target - tst_off:X} [_load_dylinker PAC bypass]",
-                    )
-                    return True
-
-            off = func_end
-
-        self._log("  [-] PAC rebase function not found")
+        self._log("  [-] dyld policy gate not found")
         return False
 
-    def _find_tst_pac_triplet(self, start, end):
-        """Find last TST+B.EQ+MOVK(#0xc8a2) triplet. Returns (tst_off, beq_target)."""
-        last = None
+    def _find_bl_cbz_gate(self, start, end):
+        """Find BL <check>; CBZ W0,<allow>; MOV W0,#2 gate and return (bl_off, allow_target)."""
         for off in range(start, end - 8, 4):
-            d = self._disas_at(off, 3)
-            if len(d) < 3:
+            d0 = self._disas_at(off)
+            d1 = self._disas_at(off + 4)
+            d2 = self._disas_at(off + 8)
+            if not d0 or not d1:
                 continue
-            i0, i1, i2 = d[0], d[1], d[2]
-            if (
-                i0.mnemonic == "tst"
-                and "40000000000000" in i0.op_str
-                and i1.mnemonic == "b.eq"
-                and i2.mnemonic == "movk"
-                and "#0xc8a2" in i2.op_str
-            ):
-                last = (off, i1.operands[-1].imm)
-        return last
+            i0 = d0[0]
+            i1 = d1[0]
+            if i0.mnemonic != "bl" or i1.mnemonic != "cbz":
+                continue
+            if not i1.op_str.startswith("w0, "):
+                continue
+            if len(i1.operands) < 2:
+                continue
+            allow_target = i1.operands[-1].imm
+
+            # Keep selector strict: deny path usually sets errno=2 right after CBZ.
+            if d2 and d2[0].mnemonic == "mov" and d2[0].op_str.startswith("w0, #2"):
+                return off, allow_target
+        return None

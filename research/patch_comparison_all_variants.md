@@ -86,6 +86,16 @@ Regular and Dev share the same 28 base kernel patches. JB adds 34 additional pat
 | 16    | `NOP` (3x)                 | `handle_get_dev_by_role`         | Bypass APFS role-lookup deny gates for boot mounts (context + entitlement + role==2 path) |    Y    |  Y  |  Y  |
 | 17–26 | `mov x0,#0; ret` (5 hooks) | Sandbox MACF ops table           | Stub 5 sandbox hooks                                                                      |    Y    |  Y  |  Y  |
 
+Base-patch verification note (2026-03-05):
+- Non-JB validation report for #1-#5 (clean `fw_prepare` kernel, locator uniqueness + IDA path checks):
+  [`research/kernel_patch_base_first5_validation_2026-03-05.md`](kernel_patch_base_first5_validation_2026-03-05.md)
+- Non-JB validation report for #16-#20 (APFS get-dev-by-role deny gates + sandbox `file_check_mmap`/`mount_check_mount`):
+  [`research/kernel_patch_base_16_20_validation_2026-03-05.md`](kernel_patch_base_16_20_validation_2026-03-05.md)
+- Non-JB validation report for #11-#15 (dyld/apfs-graft/mount-upgrade/fsioc-graft target-site checks):
+  [`research/kernel_patch_base_11_15_validation_2026-03-05.md`](kernel_patch_base_11_15_validation_2026-03-05.md)
+- Non-JB validation report for #21-#26 (remaining sandbox hook index-to-entry verification):
+  [`research/kernel_patch_sandbox_hooks_21_26_validation_2026-03-05.md`](kernel_patch_sandbox_hooks_21_26_validation_2026-03-05.md)
+
 #### JB-only kernel patches
 
 | #   | Patch                        | Function                             | Purpose                                    | Regular | Dev | JB  |
@@ -93,7 +103,7 @@ Regular and Dev share the same 28 base kernel patches. JB adds 34 additional pat
 | 26  | Function rewrite             | `AMFIIsCDHashInTrustCache`           | Always return true + store hash            |    —    |  —  |  Y  |
 | 27  | Shellcode + branch           | `_cred_label_update_execve`          | Set cs_flags (platform+entitlements)       |    —    |  —  |  Y  |
 | 28  | `cmp w0,w0`                  | `_postValidation` (additional)       | Force validation pass                      |    —    |  —  |  Y  |
-| 29  | Shellcode + branch           | `_syscallmask_apply_to_proc`         | Patch zalloc_ro_mut for syscall mask       |    —    |  —  |  Y  |
+| 29  | Shellcode + branch           | `_syscallmask_apply_to_proc`         | Patch zalloc_ro_mut for syscall mask (legacy-signature gated, fail-closed on mismatch) |    —    |  —  |  Y  |
 | 30  | Inline trampoline + cave     | `_hook_cred_label_update_execve`     | vnode_getattr ownership + suid propagation |    —    |  —  |  Y  |
 | 31  | `mov x0,#0; ret` (20+ hooks) | Sandbox MACF ops (extended)          | Stub remaining 20+ sandbox hooks           |    —    |  —  |  Y  |
 | 32  | `cmp xzr,xzr`                | `_task_conversion_eval_internal`     | Allow task conversion                      |    —    |  —  |  Y  |
@@ -102,15 +112,15 @@ Regular and Dev share the same 28 base kernel patches. JB adds 34 additional pat
 | 35  | `b` (skip panic)             | `_convert_port_to_map_with_flavor`   | Skip kernel map panic                      |    —    |  —  |  Y  |
 | 36  | NOP                          | `_vm_fault_enter_prepare`            | Skip fault check                           |    —    |  —  |  Y  |
 | 37  | `b` (skip check)             | `_vm_map_protect`                    | Allow VM protect                           |    —    |  —  |  Y  |
-| 38  | NOP + `mov x8,xzr`           | `___mac_mount`                       | Bypass MAC mount check                     |    —    |  —  |  Y  |
-| 39  | NOP                          | `_dounmount`                         | Allow unmount                              |    —    |  —  |  Y  |
+| 38  | NOP deny-branch (+optional `mov x8,xzr`) | `___mac_mount`             | Bypass MAC mount deny path (strict site)   |    —    |  —  |  Y  |
+| 39  | NOP (strict in-function match) | `_dounmount`                       | Allow unmount (unsafe broad fallback removed) |    —    |  —  |  Y  |
 | 40  | `mov x0,#0`                  | `_bsd_init` (2nd)                    | Skip auth at @%s:%d                        |    —    |  —  |  Y  |
 | 41  | NOP (2x)                     | `_spawn_validate_persona`            | Skip persona validation                    |    —    |  —  |  Y  |
 | 42  | NOP                          | `_task_for_pid`                      | Allow task_for_pid                         |    —    |  —  |  Y  |
 | 43  | `b` (skip check)             | `_load_dylinker`                     | Allow dylinker loading                     |    —    |  —  |  Y  |
 | 44  | `cmp x0,x0`                  | `_shared_region_map_and_slide_setup` | Force shared region                        |    —    |  —  |  Y  |
 | 45  | NOP BL                       | `_verifyPermission` (NVRAM)          | Allow NVRAM writes                         |    —    |  —  |  Y  |
-| 46  | `b` (skip check)             | `_IOSecureBSDRoot`                   | Skip secure root check                     |    —    |  —  |  Y  |
+| 46  | `b` (strict policy branch)   | `_IOSecureBSDRoot`                   | Skip secure root check (guard-site filter) |    —    |  —  |  Y  |
 | 47  | Syscall 439 + shellcode      | kcall10 (`SYS_kas_info` replacement) | Kernel arbitrary call from userspace       |    —    |  —  |  Y  |
 | 48  | Zero out                     | `_thid_should_crash`                 | Prevent GUARD_TYPE_MACH_PORT crash         |    —    |  —  |  Y  |
 
@@ -286,6 +296,13 @@ with capstone semantic matching and keystone-generated patch bytes only:
    - Locator: unique cmp/branch motif:
      `ldr xN,[xN,#imm] ; cmp xN,x0 ; b.eq ; cmp xN,x1 ; b.eq`.
    - Patch: `cmp xN,x0 -> cmp xzr,xzr`.
+   - Hardening (2026-03-05):
+     - default fail-closed fast matcher only (slow fallback requires
+       `VPHONE_TASK_CONV_ALLOW_SLOW_FALLBACK=1`)
+     - extra context fingerprint required before patch:
+       `ADRP+LDR` preamble + post-sequence
+       `mov x19,x0 ; mov x0,x1 ; bl ; cbz/cbnz w0`
+     - both `b.eq` targets must be forward short branches.
 4. Extended sandbox MACF hook stubs (25 hooks, JB-only set)
    - Locator: dynamic `mac_policy_conf -> mpc_ops` discovery, then hook-index resolution.
    - Patch per hook function: `mov x0,#0 ; ret`.
@@ -303,23 +320,36 @@ with capstone semantic matching and keystone-generated patch bytes only:
      now only print slow methods (runtime `>=10s`), patch output/selection unchanged.
 7. `_proc_pidinfo` pid-0 guard NOP (2 sites)
 8. `_convert_port_to_map_with_flavor` panic skip — FIXED: was patching PAC check instead
-9. `_vm_fault_enter_prepare` PMAP check NOP
+9. `_vm_fault_enter_prepare` PMAP check NOP — FIXED: removed unsafe broad fallback
+   - Strict locator (2026-03-05): resolve vm_fault function via symbol/string anchor only;
+     in-function unique fingerprint required:
+     `BL(rare target) -> LDRB wN,[xM,#0x2c] -> TBZ/TBNZ wN`.
+   - Ambiguous/missing matches now fail-closed.
 10. `_vm_map_protect` permission check skip
-11. `___mac_mount` MAC check bypass (NOP + mov x8,xzr)
-12. `_dounmount` MAC check NOP
-13. `_bsd_init` auth bypass (mov x0,#0)
-14. `_spawn_validate_persona` NOP (2 sites)
+11. `___mac_mount` MAC check bypass — FIXED: patch deny branch (`CBNZ w0`) instead of NOP'ing BL
+12. `_dounmount` MAC check NOP — FIXED: unsafe broad kern_text fallback removed (fail-closed)
+13. `_bsd_init` auth bypass (mov x0,#0) — FIXED: candidate selection hardened
+   - Strict selector (2026-03-05): keep candidates near rootvp anchor region and require
+     boot-path `/dev/null` function fingerprint before patching.
+   - Prevents high-offset plugin/kext false positives; unresolved cases fail-closed.
+14. `_spawn_validate_persona` guard bypass — FIXED: removed global pattern scan
+   - Strict locator (2026-03-05): resolve spawn anchor function via
+     `com.apple.private.spawn-*` strings; no cross-kernel broad scan.
+   - Newer layout support: patch persona gate branch (`tbz/tbnz ... #1`) to unconditional
+     `b target` inside the anchored spawn function.
+   - Legacy `LDR + TBNZ` two-site NOP path retained when present.
 15. `_task_for_pid` proc_ro security copy NOP
 16. `_load_dylinker` PAC rebase bypass
 17. `_shared_region_map_and_slide_setup` force (cmp x0,x0)
 18. `_verifyPermission` (NVRAM) NOP
-19. `_IOSecureBSDRoot` check skip
+19. `_IOSecureBSDRoot` check skip — FIXED: requires `SecureRoot`+`SecureRootName` function match and guard-site filtering
 20. `_thid_should_crash` zero out
 
 **Group C: Complex shellcode patches**
 
 21. `_cred_label_update_execve` cs_flags shellcode
 22. `_syscallmask_apply_to_proc` filter mask shellcode
+    - 2026-03-05 revalidation: locator now rejects low-confidence matches and panic-target helper resolution (fail-closed on signature mismatch).
 23. `_hook_cred_label_update_execve` inline trampoline + vnode_getattr shellcode
     - Code cave restricted to **TEXT_EXEC only (**PRELINK_TEXT excluded due to KTRR)
     - Inline trampoline (B cave at function entry) replaces ops table pointer rewrite
