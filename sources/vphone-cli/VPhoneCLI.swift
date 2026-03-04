@@ -58,6 +58,9 @@ struct VPhoneCLI: ParsableCommand {
     @Option(help: "Window scale divisor (default: 3.0)")
     var screenScale: Double = 3.0
 
+    @Option(help: "Kernel GDB debug stub port on host (default: 5909)")
+    var kernelDebugPort: Int = 5909
+
     @Flag(help: "Run without GUI (headless)")
     var noGraphics: Bool = false
 

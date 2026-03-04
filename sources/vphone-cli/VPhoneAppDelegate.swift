@@ -62,9 +62,10 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
         print(
             "Screen: \(cli.screenWidth)x\(cli.screenHeight) @ \(cli.screenPpi) PPI (scale \(cli.screenScale)x)"
         )
-        print("SEP   : enabled")
-        print("  storage: \(cli.sepStorage)")
-        print("  rom    : \(cli.sepRom)")
+        print("Kernel debug stub : 127.0.0.1:\(cli.kernelDebugPort)")
+        print("SEP               : enabled")
+        print("  storage         : \(cli.sepStorage)")
+        print("  rom             : \(cli.sepRom)")
         print("")
 
         let options = VPhoneVirtualMachine.Options(
@@ -79,7 +80,8 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             screenWidth: cli.screenWidth,
             screenHeight: cli.screenHeight,
             screenPPI: cli.screenPpi,
-            screenScale: cli.screenScale
+            screenScale: cli.screenScale,
+            kernelDebugPort: cli.kernelDebugPort
         )
 
         let vm = try VPhoneVirtualMachine(options: options)
