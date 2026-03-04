@@ -8,6 +8,8 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
     let virtualMachine: VZVirtualMachine
     /// Read handle for VM serial output.
     private var serialOutputReadHandle: FileHandle?
+    /// Synthetic battery source for runtime charge/connectivity updates.
+    private var batterySource: AnyObject?
 
     struct Options {
         var romURL: URL
@@ -148,6 +150,18 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
         // Vsock (host ↔ guest control channel, no IP/TCP involved)
         config.socketDevices = [VZVirtioSocketDeviceConfiguration()]
 
+        // Power source (synthetic battery — guest sees full charge, charging)
+        let source = Dynamic._VZMacSyntheticBatterySource()
+        source.setCharge(100.0)
+        source.setConnectivity(1) // 1=charging, 2=disconnected
+        let batteryConfig = Dynamic._VZMacBatteryPowerSourceDeviceConfiguration()
+        batteryConfig.setSource(source.asObject)
+        if let batteryObj = batteryConfig.asObject {
+            Dynamic(config)._setPowerSourceDevices([batteryObj])
+            batterySource = source.asObject as AnyObject?
+            print("[vphone] Synthetic battery configured (100%, charging)")
+        }
+
         // GDB debug stub (default init, system-assigned port)
         Dynamic(config)._setDebugStub(Dynamic._VZGDBDebugStubConfiguration().asObject)
 
@@ -176,6 +190,18 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
                 FileHandle.standardOutput.write(data)
             }
         }
+    }
+
+    // MARK: - Battery
+
+    /// Update the synthetic battery charge and connectivity at runtime.
+    /// - Parameters:
+    ///   - charge: Battery percentage (0.0–100.0).
+    ///   - connectivity: 1 = charging, 2 = disconnected.
+    func setBattery(charge: Double, connectivity: Int) {
+        guard let source = batterySource else { return }
+        Dynamic(source).setCharge(charge)
+        Dynamic(source).setConnectivity(connectivity)
     }
 
     // MARK: - Start

@@ -120,6 +120,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             fileWindowController = fileWC
 
             let mc = VPhoneMenuController(keyHelper: keyHelper, control: control)
+            mc.vm = vm
             mc.onFilesPressed = { [weak fileWC, weak control] in
                 guard let fileWC, let control else { return }
                 fileWC.showWindow(control: control)

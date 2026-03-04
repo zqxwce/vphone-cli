@@ -7,6 +7,7 @@ import Foundation
 class VPhoneMenuController {
     let keyHelper: VPhoneKeyHelper
     let control: VPhoneControl
+    weak var vm: VPhoneVirtualMachine?
 
     var onFilesPressed: (() -> Void)?
     var locationProvider: VPhoneLocationProvider?
@@ -46,6 +47,7 @@ class VPhoneMenuController {
         mainMenu.addItem(buildInstallMenu())
         mainMenu.addItem(buildLocationMenu())
         mainMenu.addItem(buildRecordMenu())
+        mainMenu.addItem(buildBatteryMenu())
 
         NSApp.mainMenu = mainMenu
     }
