@@ -57,6 +57,8 @@ RAMDISK_BOOT_ARGS = b"serial=3 rd=md0 debug=0x2014e -v wdt=-1 %s"
 # IM4P fourccs for restore mode
 TXM_FOURCC = "trxm"
 KERNEL_FOURCC = "rkrn"
+RAMDISK_KERNEL_SUFFIX = ".ramdisk"
+RAMDISK_KERNEL_IMG4 = "krnl.ramdisk.img4"
 
 # Files to remove from ramdisk to save space
 RAMDISK_REMOVE = [
@@ -196,6 +198,18 @@ def create_im4p_uncompressed(raw_data, fourcc, description, output_path):
     )
     with open(output_path, "wb") as f:
         f.write(new_im4p.output())
+
+
+def build_kernel_img4(kernel_src, output_dir, temp_dir, im4m_path, output_name, temp_tag):
+    """Build one signed kernel IMG4 from a kernelcache source file."""
+    kc_raw = os.path.join(temp_dir, f"{temp_tag}.raw")
+    kc_im4p = os.path.join(temp_dir, f"{temp_tag}.im4p")
+    _, data, original_raw = extract_to_raw(kernel_src, kc_raw)
+    print(f"  source: {kernel_src}")
+    print(f"  format: IM4P, {len(data)} bytes")
+    _save_im4p_with_payp(kc_im4p, KERNEL_FOURCC, data, original_raw)
+    sign_img4(kc_im4p, os.path.join(output_dir, output_name), im4m_path)
+    print(f"  [+] {output_name}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -573,15 +587,36 @@ def main():
         ],
         "kernelcache",
     )
-    kc_raw = os.path.join(temp_dir, "kcache.raw")
-    im4p_obj, data, original_raw = extract_to_raw(kc_src, kc_raw)
-    print(f"  format: IM4P, {len(data)} bytes")
-    kc_im4p = os.path.join(temp_dir, "krnl.im4p")
-    _save_im4p_with_payp(kc_im4p, KERNEL_FOURCC, data, original_raw)
-    sign_img4(
-        kc_im4p, os.path.join(output_dir, "krnl.img4"), im4m_path
-    )
-    print(f"  [+] krnl.img4")
+    kc_ramdisk_src = f"{kc_src}{RAMDISK_KERNEL_SUFFIX}"
+    if os.path.isfile(kc_ramdisk_src):
+        print(f"  found ramdisk kernel snapshot: {kc_ramdisk_src}")
+        print(f"  building {RAMDISK_KERNEL_IMG4} from base/dev snapshot")
+        build_kernel_img4(
+            kc_ramdisk_src,
+            output_dir,
+            temp_dir,
+            im4m_path,
+            RAMDISK_KERNEL_IMG4,
+            "kcache_ramdisk",
+        )
+        print("  building krnl.img4 from restore kernel (post-JB)")
+        build_kernel_img4(
+            kc_src,
+            output_dir,
+            temp_dir,
+            im4m_path,
+            "krnl.img4",
+            "kcache_jb",
+        )
+    else:
+        build_kernel_img4(
+            kc_src,
+            output_dir,
+            temp_dir,
+            im4m_path,
+            "krnl.img4",
+            "kcache",
+        )
 
     # ── 8. Ramdisk + Trustcache ──────────────────────────────────
     print(f"\n{'=' * 60}")

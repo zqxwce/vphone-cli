@@ -18,6 +18,16 @@ fi
 
 echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 
+KERNEL_IMG="$RAMDISK_DIR/krnl.img4"
+if [[ -f "$RAMDISK_DIR/krnl.ramdisk.img4" ]]; then
+    KERNEL_IMG="$RAMDISK_DIR/krnl.ramdisk.img4"
+    echo "  [*] Using ramdisk kernel variant: $(basename "$KERNEL_IMG")"
+fi
+[[ -f "$KERNEL_IMG" ]] || {
+    echo "[-] Kernel image not found: $KERNEL_IMG"
+    exit 1
+}
+
 # 1. Load iBSS + iBEC (DFU → recovery)
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
@@ -61,7 +71,7 @@ echo "  [8/8] Loading SEP..."
 
 # 8. Load kernel and boot
 echo "  [*] Booting kernel..."
-"$IRECOVERY" -f "$RAMDISK_DIR/krnl.img4"
+"$IRECOVERY" -f "$KERNEL_IMG"
 "$IRECOVERY" -c bootx
 
 echo "[+] Boot sequence complete. Device should be booting into ramdisk."

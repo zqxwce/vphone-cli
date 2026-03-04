@@ -184,6 +184,17 @@ Regular and Dev share the same 25 base kernel patches. JB adds 34 additional pat
     - `jb/org.coolstar.sileo_2.5.1_iphoneos-arm64.deb`
     - `basebin/*.dylib` (BaseBin hooks for JB-3)
 
+## Ramdisk Kernel Split (JB mode)
+
+- `scripts/fw_patch_jb.py` now snapshots the base/dev-patched kernel before JB kernel extensions:
+  - `iPhone*_Restore/kernelcache.research.vphone600.ramdisk`
+- `scripts/ramdisk_build.py` uses that snapshot to build:
+  - `Ramdisk/krnl.ramdisk.img4` (base/dev kernel for SSH ramdisk boot + CFW install)
+  - `Ramdisk/krnl.img4` (post-JB kernel, unchanged restore target)
+- `scripts/ramdisk_send.sh` now prefers `krnl.ramdisk.img4` when present, otherwise falls back to `krnl.img4`.
+- Intent: keep restore kernel fully JB-patched while booting the installer ramdisk with a
+  more conservative kernel variant to improve `/dev/disk1s1` remount reliability.
+
 ## Dynamic Implementation Log (JB Patchers)
 
 ### TXM (`txm_dev.py`)
