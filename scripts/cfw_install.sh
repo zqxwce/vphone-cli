@@ -142,7 +142,14 @@ safe_detach() {
 # Mount device filesystem, tolerate already-mounted
 remote_mount() {
     local dev="$1" mnt="$2" opts="${3:-rw}"
+    ssh_cmd "/bin/mkdir -p $mnt"
+    if ssh_cmd "/sbin/mount | /usr/bin/grep -q ' on $mnt '"; then
+        return 0
+    fi
     ssh_cmd "/sbin/mount_apfs -o $opts $dev $mnt 2>/dev/null || true"
+    if ! ssh_cmd "/sbin/mount | /usr/bin/grep -q ' on $mnt '"; then
+        die "Failed to mount $dev at $mnt (opts=$opts). Make sure the ramdisk was booted with the expected patched kernel."
+    fi
 }
 
 # ── Find restore directory ─────────────────────────────────────
@@ -258,7 +265,7 @@ SNAP_LIST=$(ssh_cmd "snaputil -l /mnt1 2>/dev/null" || true)
 if echo "$SNAP_LIST" | grep -q "^orig-fs$"; then
     echo "  Snapshot 'orig-fs' already exists, skipping rename"
 else
-    UPDATE_SNAP=$(echo "$SNAP_LIST" | grep "^com\.apple\.os\.update-" | head -1)
+    UPDATE_SNAP=$(echo "$SNAP_LIST" | awk '/^com\.apple\.os\.update-/{print; exit}')
     if [[ -n "$UPDATE_SNAP" ]]; then
         echo "  Renaming snapshot: $UPDATE_SNAP -> orig-fs"
         ssh_cmd "snaputil -n '$UPDATE_SNAP' orig-fs /mnt1"
