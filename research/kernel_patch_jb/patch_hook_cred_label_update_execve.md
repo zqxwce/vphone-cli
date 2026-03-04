@@ -43,7 +43,13 @@
   - [29]: `0xFE00093B0830` (696 bytes)
 
 ### vnode_getattr
-- String-related hit: xref `0xFE00084C08EC` → function start `0xFE00084C0718`
+- Real `vnode_getattr`: `sub_FFFFFE0007CCD1B4` (file offset `0xCC91B4`)
+  - Signature: `int vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)`
+  - Located in XNU kernel proper (not a kext)
+- **Bug 3 note**: The string `"vnode_getattr"` appears in format strings like
+  `"%s: vnode_getattr: %d"` inside callers (e.g., AppleImage4 at `0xFE00084C0718`).
+  The old string-anchor approach resolved to the AppleImage4 caller, not vnode_getattr.
+  See Bug 3 below.
 
 ### Original hook prologue
 ```
@@ -101,6 +107,37 @@ Replace PACIBSP at function entry with `B cave`. The cave runs PACIBSP first
 (relocated instruction), performs ownership propagation, then `B hook+4` to
 resume the original function. Uses only PC-relative B/BL instructions —
 no PAC involvement, no chained fixup modification.
+
+### Bug 3: BL to wrong function — string anchor misresolution (PAC PANIC)
+The string-anchor approach for finding `vnode_getattr` was:
+1. `find_string(b"vnode_getattr")` → finds `"%s: vnode_getattr: %d"` (format string)
+2. `find_string_refs()` → finds ADRP+ADD at `0xFE00084C08EC` (inside AppleImage4 function)
+3. `find_function_start()` → returns `0xFE00084C0718` (an **AppleImage4** function)
+
+This function is NOT `vnode_getattr` — it is an AppleImage4 function that CALLS
+`vnode_getattr` and prints the error message when the call fails. The BL in
+our shellcode was calling into AppleImage4's function with wrong arguments.
+
+At `0xFE00084C0774`, this function does:
+```
+v9 = (*(__int64 (**)(void))(a2 + 48))();  // indirect PAC-signed call
+```
+With our arguments, `a2` (vattr buffer) had garbage at offset +48, causing a
+PAC-authenticated branch to fail → same panic as Bug 2.
+
+**Bisection results** (systematic boot tests):
+- Variant A (stack frame save/restore only): **BOOTS OK**
+- Variant B (+ mrs tpidr_el1 + vfs_context): **BOOTS OK**
+- Variant C (+ BL vnode_getattr): **PANICS** ← crash introduced here
+- Full shellcode: PANICS
+
+**Fix**: Replaced the string-anchor resolution with `_find_vnode_getattr_via_string()`:
+1. Find the format string `"%s: vnode_getattr: %d"`
+2. Find the ADRP+ADD xref to it (inside the caller function)
+3. Scan backward from the xref for a BL instruction (the call to the real vnode_getattr)
+4. Extract the BL target → `sub_FFFFFE0007CCD1B4` = real `vnode_getattr`
+
+The real `vnode_getattr` is at file offset `0xCC91B4`, not `0x14BC718`.
 
 ## 6) Current Implementation
 - 47 patches: 46 shellcode instructions in __TEXT_EXEC cave + 1 trampoline

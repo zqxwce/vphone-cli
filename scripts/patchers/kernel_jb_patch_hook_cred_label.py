@@ -6,6 +6,76 @@ PACIBSP = bytes([0x7F, 0x23, 0x03, 0xD5])  # 0xD503237F
 
 
 class KernelJBPatchHookCredLabelMixin:
+    def _find_vnode_getattr_via_string(self):
+        """Find vnode_getattr by locating a caller function via string ref.
+
+        The string "vnode_getattr" appears in format strings like
+        "%s: vnode_getattr: %d" inside functions that CALL vnode_getattr.
+        We find such a caller, then extract the BL target near the string
+        reference to get the real vnode_getattr address.
+
+        Previous approach: find_string → find_string_refs → find_function_start
+        was wrong because it returned the CALLER (e.g. an AppleImage4 function)
+        instead of vnode_getattr itself.
+        """
+        str_off = self.find_string(b"vnode_getattr")
+        if str_off < 0:
+            return -1
+
+        refs = self.find_string_refs(str_off)
+        if not refs:
+            return -1
+
+        # The string ref is inside a function that calls vnode_getattr.
+        # Scan backward from the string ref for a BL instruction — the
+        # nearest preceding BL is very likely the BL vnode_getattr call
+        # (the error message prints right after the call fails).
+        ref_off = refs[0][0]  # ADRP offset
+        for scan_off in range(ref_off - 4, ref_off - 64, -4):
+            if scan_off < 0:
+                break
+            insn = _rd32(self.raw, scan_off)
+            if (insn >> 26) == 0x25:  # BL opcode
+                imm26 = insn & 0x3FFFFFF
+                if imm26 & (1 << 25):
+                    imm26 -= 1 << 26  # sign extend
+                target = scan_off + imm26 * 4
+                if any(s <= target < e for s, e in self.code_ranges):
+                    self._log(
+                        f"  [+] vnode_getattr at 0x{target:X} "
+                        f"(via BL at 0x{scan_off:X}, "
+                        f"near string ref at 0x{ref_off:X})"
+                    )
+                    return target
+
+        # Fallback: try additional string hits
+        start = str_off + 1
+        for _ in range(5):
+            str_off2 = self.find_string(b"vnode_getattr", start)
+            if str_off2 < 0:
+                break
+            refs2 = self.find_string_refs(str_off2)
+            if refs2:
+                ref_off2 = refs2[0][0]
+                for scan_off in range(ref_off2 - 4, ref_off2 - 64, -4):
+                    if scan_off < 0:
+                        break
+                    insn = _rd32(self.raw, scan_off)
+                    if (insn >> 26) == 0x25:  # BL
+                        imm26 = insn & 0x3FFFFFF
+                        if imm26 & (1 << 25):
+                            imm26 -= 1 << 26
+                        target = scan_off + imm26 * 4
+                        if any(s <= target < e for s, e in self.code_ranges):
+                            self._log(
+                                f"  [+] vnode_getattr at 0x{target:X} "
+                                f"(via BL at 0x{scan_off:X})"
+                            )
+                            return target
+            start = str_off2 + 1
+
+        return -1
+
     def patch_hook_cred_label_update_execve(self):
         """Inline-trampoline the sandbox cred_label_update_execve hook.
 
@@ -26,16 +96,7 @@ class KernelJBPatchHookCredLabelMixin:
         # ── 1. Find vnode_getattr via string anchor ──────────────
         vnode_getattr_off = self._resolve_symbol("_vnode_getattr")
         if vnode_getattr_off < 0:
-            str_off = self.find_string(b"vnode_getattr")
-            if str_off >= 0:
-                refs = self.find_string_refs(str_off)
-                if refs:
-                    vnode_getattr_off = self.find_function_start(refs[0][0])
-                    if vnode_getattr_off >= 0:
-                        self._log(
-                            f"  [+] vnode_getattr at 0x"
-                            f"{vnode_getattr_off:X} (via string)"
-                        )
+            vnode_getattr_off = self._find_vnode_getattr_via_string()
 
         if vnode_getattr_off < 0:
             self._log("  [-] vnode_getattr not found")
