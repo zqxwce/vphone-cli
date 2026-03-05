@@ -269,8 +269,8 @@ echo "  Patch debugserver entitlements..."
 
 scp_from "/mnt1/usr/libexec/debugserver" "$TEMP_DIR/debugserver"
 ldid -e "$TEMP_DIR/debugserver" > "$TEMP_DIR/debugserver-entitlements.plist"
-plutil -remove seatbelt-profiles "$TEMP_DIR/debugserver-entitlements.plist"
-plutil -insert task_for_pid-allow -bool YES "$TEMP_DIR/debugserver-entitlements.plist"
+plutil -remove seatbelt-profiles "$TEMP_DIR/debugserver-entitlements.plist" || true
+plutil -insert task_for_pid-allow -bool YES "$TEMP_DIR/debugserver-entitlements.plist" || true
 ldid_sign_ent "$TEMP_DIR/debugserver" "$TEMP_DIR/debugserver-entitlements.plist"
 scp_to "$TEMP_DIR/debugserver" "/mnt1/usr/libexec/debugserver"
 ssh_cmd "/bin/chmod 0755 /mnt1/usr/libexec/debugserver"
