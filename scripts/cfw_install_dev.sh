@@ -29,7 +29,7 @@ CFW_INPUT="cfw_input"
 CFW_ARCHIVE="cfw_input.tar.zst"
 TEMP_DIR="$VM_DIR/.cfw_temp"
 
-SSH_PORT=2222
+SSH_PORT="${SSH_PORT:-2222}"
 SSH_PASS="alpine"
 SSH_USER="root"
 SSH_HOST="localhost"

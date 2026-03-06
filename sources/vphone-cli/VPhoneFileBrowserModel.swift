@@ -195,7 +195,7 @@ class VPhoneFileBrowserModel {
         transferName = nil
         await refresh()
         // Set error after refresh so refresh() doesn't clear it before the alert fires.
-        if let e = uploadError { self.error = e }
+        if let e = uploadError { error = e }
     }
 
     func createNewFolder(name: String) async {

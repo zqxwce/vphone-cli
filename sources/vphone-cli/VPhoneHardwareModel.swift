@@ -13,6 +13,9 @@ import Virtualization
 /// Minimum host OS for PV=3: macOS 15.0 (Sequoia)
 ///
 enum VPhoneHardware {
+    /// Fixed CPID for the current vphone hardware descriptor.
+    static let udidChipID: UInt32 = 0xFE01
+
     static func createModel() throws -> VZMacHardwareModel {
         // platformVersion=3, boardID=0x90, ISA=2 matches vresearch101
         let desc = Dynamic._VZMacHardwareModelDescriptor()

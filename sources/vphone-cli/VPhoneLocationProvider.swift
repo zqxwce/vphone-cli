@@ -46,7 +46,9 @@ class VPhoneLocationProvider: NSObject {
     private var replayTask: Task<Void, Never>?
     private var replayName: String?
 
-    var isReplaying: Bool { replayTask != nil }
+    var isReplaying: Bool {
+        replayTask != nil
+    }
 
     init(control: VPhoneControl) {
         self.control = control
@@ -135,7 +137,7 @@ class VPhoneLocationProvider: NSObject {
             var index = 0
             while !Task.isCancelled {
                 let point = points[index]
-                self.sendSimulatedLocation(
+                sendSimulatedLocation(
                     latitude: point.latitude,
                     longitude: point.longitude,
                     altitude: point.altitude,

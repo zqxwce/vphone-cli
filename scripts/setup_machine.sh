@@ -17,7 +17,7 @@ cd "$PROJECT_ROOT"
 
 LOG_DIR="${PROJECT_ROOT}/setup_logs"
 DFU_LOG="${LOG_DIR}/boot_dfu.log"
-IPROXY_LOG="${LOG_DIR}/iproxy_2222.log"
+IPROXY_LOG=""
 
 DFU_PID=""
 IPROXY_PID=""
@@ -32,9 +32,16 @@ POST_RESTORE_KILL_DELAY="${POST_RESTORE_KILL_DELAY:-30}"
 POST_KILL_SETTLE_DELAY="${POST_KILL_SETTLE_DELAY:-5}"
 RAMDISK_SSH_TIMEOUT="${RAMDISK_SSH_TIMEOUT:-60}"
 RAMDISK_SSH_INTERVAL="${RAMDISK_SSH_INTERVAL:-2}"
-RAMDISK_SSH_PORT="${RAMDISK_SSH_PORT:-2222}"
+RAMDISK_SSH_PORT="${RAMDISK_SSH_PORT:-}"
 RAMDISK_SSH_USER="${RAMDISK_SSH_USER:-root}"
 RAMDISK_SSH_PASS="${RAMDISK_SSH_PASS:-alpine}"
+RAMDISK_SSH_PORT_EXPLICIT=0
+if [[ -n "$RAMDISK_SSH_PORT" ]]; then
+  RAMDISK_SSH_PORT_EXPLICIT=1
+fi
+
+DEVICE_UDID=""
+DEVICE_ECID=""
 JB_MODE=0
 DEV_MODE=0
 SKIP_PROJECT_SETUP=0
@@ -47,6 +54,92 @@ die() {
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "Missing required command: $cmd"
+}
+
+normalize_ecid() {
+  local ecid="$1"
+  ecid="${ecid#0x}"
+  ecid="${ecid#0X}"
+  [[ "$ecid" =~ ^[0-9A-Fa-f]{1,16}$ ]] || return 1
+  printf "%016s" "${ecid:u}" | tr ' ' '0'
+}
+
+load_device_identity() {
+  local prediction_file="${VM_DIR_ABS}/udid-prediction.txt"
+  local timeout=30
+  local waited=0
+  local key value
+  local udid_ecid
+
+  while [[ ! -f "$prediction_file" && "$waited" -lt "$timeout" ]]; do
+    if [[ -n "$DFU_PID" ]] && ! kill -0 "$DFU_PID" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+    (( waited++ ))
+  done
+
+  [[ -f "$prediction_file" ]] || die "Missing ${prediction_file}. Rebuild and run make boot_dfu to generate it."
+
+  DEVICE_UDID=""
+  DEVICE_ECID=""
+  while IFS='=' read -r key value; do
+    case "$key" in
+      UDID)
+        DEVICE_UDID="${value:u}"
+        ;;
+      ECID)
+        DEVICE_ECID="$(normalize_ecid "$value" || true)"
+        ;;
+    esac
+  done < "$prediction_file"
+
+  [[ "$DEVICE_UDID" =~ ^[0-9A-F]{8}-[0-9A-F]{16}$ ]] \
+    || die "Invalid UDID in ${prediction_file}: ${DEVICE_UDID}"
+
+  if [[ -z "$DEVICE_ECID" ]]; then
+    DEVICE_ECID="${DEVICE_UDID#*-}"
+  fi
+  [[ "$DEVICE_ECID" =~ ^[0-9A-F]{16}$ ]] \
+    || die "Invalid ECID in ${prediction_file}: ${DEVICE_ECID}"
+
+  udid_ecid="${DEVICE_UDID#*-}"
+  [[ "$udid_ecid" == "$DEVICE_ECID" ]] \
+    || die "UDID/ECID mismatch in ${prediction_file}: ${DEVICE_UDID} vs 0x${DEVICE_ECID}"
+
+  echo "[+] Device identity loaded: UDID=${DEVICE_UDID} ECID=0x${DEVICE_ECID}"
+}
+
+port_is_listening() {
+  local port="$1"
+  lsof -n -t -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+pick_random_ssh_port() {
+  local attempt port
+  for attempt in {1..200}; do
+    port=$((20000 + (RANDOM % 40000)))
+    if ! port_is_listening "$port"; then
+      echo "$port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+choose_ramdisk_ssh_port() {
+  if [[ -n "$RAMDISK_SSH_PORT" ]]; then
+    [[ "$RAMDISK_SSH_PORT" == <-> ]] || die "RAMDISK_SSH_PORT must be an integer"
+    (( RAMDISK_SSH_PORT >= 1 && RAMDISK_SSH_PORT <= 65535 )) \
+      || die "RAMDISK_SSH_PORT out of range: ${RAMDISK_SSH_PORT}"
+    if port_is_listening "$RAMDISK_SSH_PORT"; then
+      die "RAMDISK_SSH_PORT ${RAMDISK_SSH_PORT} is already in use"
+    fi
+    return
+  fi
+
+  RAMDISK_SSH_PORT="$(pick_random_ssh_port)" \
+    || die "Failed to allocate a random local SSH forward port"
 }
 
 collect_vm_lock_pids() {
@@ -329,12 +422,19 @@ wait_for_post_restore_reboot() {
 
 wait_for_recovery() {
   local irecovery="${PROJECT_ROOT}/.limd/bin/irecovery"
+  local -a query_args
   [[ -x "$irecovery" ]] || die "irecovery not found at $irecovery"
+
+  if [[ -n "$DEVICE_ECID" ]]; then
+    query_args=(-i "0x${DEVICE_ECID}")
+  else
+    query_args=()
+  fi
 
   echo "[*] Waiting for recovery/DFU endpoint..."
   local i
   for i in {1..90}; do
-    if "$irecovery" -q >/dev/null 2>&1; then
+    if "$irecovery" "${query_args[@]}" -q >/dev/null 2>&1; then
       echo "[+] Device endpoint is reachable"
       return
     fi
@@ -346,29 +446,28 @@ wait_for_recovery() {
   exit 1
 }
 
-start_iproxy_2222() {
+start_iproxy() {
   local iproxy_bin
-  local -a stale_pids
-  local pid
   iproxy_bin="${PROJECT_ROOT}/.limd/bin/iproxy"
   [[ -x "$iproxy_bin" ]] || die "iproxy not found at $iproxy_bin (run: make setup_libimobiledevice)"
+  [[ -n "$DEVICE_UDID" ]] || die "Device UDID is empty; cannot start isolated iproxy"
 
-  stale_pids=(${(@f)$(lsof -n -t -iTCP:2222 -sTCP:LISTEN 2>/dev/null || true)})
-  if (( ${#stale_pids[@]} > 0 )); then
-    echo "[*] Found stale listener(s) on tcp/2222, terminating..."
-    for pid in "${stale_pids[@]}"; do
-      [[ -z "$pid" || "$pid" == "$$" ]] && continue
-      kill_descendants "$pid"
-      kill -9 "$pid" >/dev/null 2>&1 || true
-    done
-    sleep 1
+  choose_ramdisk_ssh_port
+
+  if port_is_listening "$RAMDISK_SSH_PORT"; then
+    if [[ "$RAMDISK_SSH_PORT_EXPLICIT" == "1" ]]; then
+      die "RAMDISK_SSH_PORT ${RAMDISK_SSH_PORT} is already in use"
+    fi
+    RAMDISK_SSH_PORT="$(pick_random_ssh_port)" \
+      || die "Failed to allocate a free random local SSH forward port"
   fi
 
+  IPROXY_LOG="${LOG_DIR}/iproxy_${RAMDISK_SSH_PORT}.log"
   mkdir -p "$LOG_DIR"
   : > "$IPROXY_LOG"
 
-  echo "[*] Starting iproxy 2222 -> 22..."
-  ("$iproxy_bin" 2222 22 >"$IPROXY_LOG" 2>&1) &
+  echo "[*] Starting iproxy ${RAMDISK_SSH_PORT} -> 22 (UDID=${DEVICE_UDID})..."
+  ("$iproxy_bin" -u "$DEVICE_UDID" "$RAMDISK_SSH_PORT" 22 >"$IPROXY_LOG" 2>&1) &
   IPROXY_PID=$!
 
   sleep 1
@@ -431,14 +530,16 @@ wait_for_ramdisk_ssh() {
   done
 
   echo "[-] Timed out waiting for ramdisk SSH readiness."
-  echo "[-] iproxy log tail:"
-  tail -n 40 "$IPROXY_LOG" 2>/dev/null || true
+  if [[ -n "$IPROXY_LOG" ]]; then
+    echo "[-] iproxy log tail:"
+    tail -n 40 "$IPROXY_LOG" 2>/dev/null || true
+  fi
   echo "[-] boot_dfu log tail:"
   tail -n 60 "$DFU_LOG" 2>/dev/null || true
   die "Ramdisk SSH did not become ready in ${RAMDISK_SSH_TIMEOUT}s."
 }
 
-stop_iproxy_2222() {
+stop_iproxy() {
   if [[ -n "$IPROXY_PID" ]] && kill -0 "$IPROXY_PID" 2>/dev/null; then
     echo "[*] Stopping iproxy (pid=$IPROXY_PID)..."
     kill_descendants "$IPROXY_PID"
@@ -522,9 +623,10 @@ main() {
   echo ""
   echo "=== Restore phase ==="
   start_boot_dfu
+  load_device_identity
   wait_for_recovery
-  run_make "Restore" restore_get_shsh
-  run_make "Restore" restore
+  run_make "Restore" restore_get_shsh RESTORE_UDID="$DEVICE_UDID" RESTORE_ECID="0x$DEVICE_ECID"
+  run_make "Restore" restore RESTORE_UDID="$DEVICE_UDID" RESTORE_ECID="0x$DEVICE_ECID"
   wait_for_post_restore_reboot
   stop_boot_dfu
   echo "[*] Waiting ${POST_KILL_SETTLE_DELAY}s for cleanup before ramdisk stage..."
@@ -533,16 +635,17 @@ main() {
   echo ""
   echo "=== Ramdisk + CFW phase ==="
   start_boot_dfu
+  load_device_identity
   wait_for_recovery
   run_make "Ramdisk" ramdisk_build
-  run_make "Ramdisk" ramdisk_send
-  start_iproxy_2222
+  run_make "Ramdisk" ramdisk_send IRECOVERY_ECID="0x$DEVICE_ECID"
+  start_iproxy
 
   wait_for_ramdisk_ssh
 
-  run_make "CFW install" "$cfw_install_target"
+  run_make "CFW install" "$cfw_install_target" SSH_PORT="$RAMDISK_SSH_PORT"
   stop_boot_dfu
-  stop_iproxy_2222
+  stop_iproxy
 
   echo ""
   echo "=== First boot ==="

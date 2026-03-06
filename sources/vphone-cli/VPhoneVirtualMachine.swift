@@ -27,6 +27,12 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
         var kernelDebugPort: Int = 5909
     }
 
+    private struct DeviceIdentity {
+        let cpidHex: String
+        let ecidHex: String
+        let udid: String
+    }
+
     init(options: Options) throws {
         // --- Hardware model (PV=3) ---
         let hwModel = try VPhoneHardware.createModel()
@@ -36,16 +42,33 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
         let platform = VZMacPlatformConfiguration()
 
         // Persist machineIdentifier for stable ECID
+        let machineIdentifier: VZMacMachineIdentifier
         if let savedData = try? Data(contentsOf: options.machineIDURL),
            let savedID = VZMacMachineIdentifier(dataRepresentation: savedData)
         {
-            platform.machineIdentifier = savedID
+            machineIdentifier = savedID
             print("[vphone] Loaded machineIdentifier (ECID stable)")
         } else {
             let newID = VZMacMachineIdentifier()
-            platform.machineIdentifier = newID
+            machineIdentifier = newID
             try newID.dataRepresentation.write(to: options.machineIDURL)
             print("[vphone] Created new machineIdentifier -> \(options.machineIDURL.lastPathComponent)")
+        }
+        platform.machineIdentifier = machineIdentifier
+
+        if let identity = Self.resolveDeviceIdentity(machineIdentifier: machineIdentifier) {
+            print("[vphone] ECID: 0x\(identity.ecidHex)")
+            print("[vphone] Predicted UDID: \(identity.udid)")
+            do {
+                let outputURL = try Self.writeUDIDPrediction(
+                    identity: identity, machineIDURL: options.machineIDURL
+                )
+                print("[vphone] Wrote UDID prediction: \(outputURL.path)")
+            } catch {
+                print("[vphone] Warning: failed to write udid-prediction.txt: \(error)")
+            }
+        } else {
+            print("[vphone] Warning: failed to resolve ECID from machineIdentifier")
         }
 
         let auxStorage = try VZMacAuxiliaryStorage(
@@ -202,6 +225,39 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
                 FileHandle.standardOutput.write(data)
             }
         }
+    }
+
+    private static func resolveDeviceIdentity(machineIdentifier: VZMacMachineIdentifier)
+        -> DeviceIdentity?
+    {
+        let ecidValue: UInt64? = if let ecid = Dynamic(machineIdentifier)._ECID.asUInt64 {
+            ecid
+        } else if let ecidNumber = Dynamic(machineIdentifier)._ECID.asObject as? NSNumber {
+            ecidNumber.uint64Value
+        } else {
+            nil
+        }
+
+        guard let ecidValue else { return nil }
+
+        let cpidHex = String(format: "%08X", VPhoneHardware.udidChipID)
+        let ecidHex = String(format: "%016llX", ecidValue)
+        let udid = "\(cpidHex)-\(ecidHex)"
+        return DeviceIdentity(cpidHex: cpidHex, ecidHex: ecidHex, udid: udid)
+    }
+
+    private static func writeUDIDPrediction(identity: DeviceIdentity, machineIDURL: URL) throws -> URL {
+        let outputURL = machineIDURL.deletingLastPathComponent().appendingPathComponent(
+            "udid-prediction.txt"
+        )
+        let content = """
+        UDID=\(identity.udid)
+        CPID=0x\(identity.cpidHex)
+        ECID=0x\(identity.ecidHex)
+        MACHINE_IDENTIFIER=\(machineIDURL.lastPathComponent)
+        """
+        try content.write(to: outputURL, atomically: true, encoding: .utf8)
+        return outputURL
     }
 
     // MARK: - Battery

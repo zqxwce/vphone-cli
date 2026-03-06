@@ -8,7 +8,25 @@
 set -euo pipefail
 
 IRECOVERY="${IRECOVERY:-irecovery}"
+IRECOVERY_ECID="${IRECOVERY_ECID:-}"
 RAMDISK_DIR="${1:-Ramdisk}"
+
+IRECOVERY_ARGS=()
+if [[ -n "$IRECOVERY_ECID" ]]; then
+    IRECOVERY_ECID="${IRECOVERY_ECID#0x}"
+    IRECOVERY_ECID="${IRECOVERY_ECID#0X}"
+    [[ "$IRECOVERY_ECID" =~ ^[0-9A-Fa-f]{1,16}$ ]] || {
+        echo "[-] Invalid IRECOVERY_ECID: ${IRECOVERY_ECID}"
+        exit 1
+    }
+    IRECOVERY_ECID="0x${IRECOVERY_ECID:u}"
+    IRECOVERY_ARGS=(-i "$IRECOVERY_ECID")
+    echo "[*] Using ECID selector for irecovery: ${IRECOVERY_ECID}"
+fi
+
+irecovery_cmd() {
+    "$IRECOVERY" "${IRECOVERY_ARGS[@]}" "$@"
+}
 
 if [[ ! -d "$RAMDISK_DIR" ]]; then
     echo "[-] Ramdisk directory not found: $RAMDISK_DIR"
@@ -30,48 +48,48 @@ fi
 
 # 1. Load iBSS + iBEC (DFU → recovery)
 echo "  [1/8] Loading iBSS..."
-"$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
+irecovery_cmd -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
 
 echo "  [2/8] Loading iBEC..."
-"$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4"
-"$IRECOVERY" -c go
+irecovery_cmd -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4"
+irecovery_cmd -c go
 
 sleep 1
 
 # 2. Load SPTM
 echo "  [3/8] Loading SPTM..."
-"$IRECOVERY" -f "$RAMDISK_DIR/sptm.vresearch1.release.img4"
-"$IRECOVERY" -c firmware
+irecovery_cmd -f "$RAMDISK_DIR/sptm.vresearch1.release.img4"
+irecovery_cmd -c firmware
 
 # 3. Load TXM
 echo "  [4/8] Loading TXM..."
-"$IRECOVERY" -f "$RAMDISK_DIR/txm.img4"
-"$IRECOVERY" -c firmware
+irecovery_cmd -f "$RAMDISK_DIR/txm.img4"
+irecovery_cmd -c firmware
 
 # 4. Load trustcache
 echo "  [5/8] Loading trustcache..."
-"$IRECOVERY" -f "$RAMDISK_DIR/trustcache.img4"
-"$IRECOVERY" -c firmware
+irecovery_cmd -f "$RAMDISK_DIR/trustcache.img4"
+irecovery_cmd -c firmware
 
 # 5. Load ramdisk
 echo "  [6/8] Loading ramdisk..."
-"$IRECOVERY" -f "$RAMDISK_DIR/ramdisk.img4"
+irecovery_cmd -f "$RAMDISK_DIR/ramdisk.img4"
 sleep 2
-"$IRECOVERY" -c ramdisk
+irecovery_cmd -c ramdisk
 
 # 6. Load device tree
 echo "  [7/8] Loading device tree..."
-"$IRECOVERY" -f "$RAMDISK_DIR/DeviceTree.vphone600ap.img4"
-"$IRECOVERY" -c devicetree
+irecovery_cmd -f "$RAMDISK_DIR/DeviceTree.vphone600ap.img4"
+irecovery_cmd -c devicetree
 
 # 7. Load SEP
 echo "  [8/8] Loading SEP..."
-"$IRECOVERY" -f "$RAMDISK_DIR/sep-firmware.vresearch101.RELEASE.img4"
-"$IRECOVERY" -c firmware
+irecovery_cmd -f "$RAMDISK_DIR/sep-firmware.vresearch101.RELEASE.img4"
+irecovery_cmd -c firmware
 
 # 8. Load kernel and boot
 echo "  [*] Booting kernel..."
-"$IRECOVERY" -f "$KERNEL_IMG"
-"$IRECOVERY" -c bootx
+irecovery_cmd -f "$KERNEL_IMG"
+irecovery_cmd -c bootx
 
 echo "[+] Boot sequence complete. Device should be booting into ramdisk."

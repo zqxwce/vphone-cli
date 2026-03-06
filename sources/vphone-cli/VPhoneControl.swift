@@ -544,7 +544,7 @@ class VPhoneControl {
         let timeoutSeconds = max(Int(timeout.rounded()), 1)
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self else { return }
-            guard let pending = self.removePending(id: id) else { return }
+            guard let pending = removePending(id: id) else { return }
             pending.handler(.failure(ControlError.requestTimedOut(type: type, seconds: timeoutSeconds)))
         }
     }

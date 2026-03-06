@@ -8,6 +8,10 @@ CPU         ?= 8
 MEMORY      ?= 8192
 DISK_SIZE   ?= 64
 CFW_INPUT   ?= cfw_input
+RESTORE_UDID ?=
+RESTORE_ECID ?=
+IRECOVERY_ECID ?=
+SSH_PORT    ?= 2222
 
 # ─── Build info ──────────────────────────────────────────────────
 GIT_HASH    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -77,7 +81,7 @@ help:
 	@echo "  make cfw_install_dev         Install CFW mods via SSH (dev mode)"
 	@echo "  make cfw_install_jb          Install CFW + JB extensions (jetsam/procursus/basebin)"
 	@echo ""
-	@echo "Variables: VM_DIR=$(VM_DIR) CPU=$(CPU) MEMORY=$(MEMORY) DISK_SIZE=$(DISK_SIZE)"
+	@echo "Variables: VM_DIR=$(VM_DIR) CPU=$(CPU) MEMORY=$(MEMORY) DISK_SIZE=$(DISK_SIZE) SSH_PORT=$(SSH_PORT)"
 
 # ═══════════════════════════════════════════════════════════════════
 # Setup
@@ -208,10 +212,16 @@ fw_patch_jb:
 .PHONY: restore_get_shsh restore
 
 restore_get_shsh:
-	cd $(VM_DIR) && "$(CURDIR)/$(IDEVICERESTORE)" -e -y ./iPhone*_Restore -t
+	cd $(VM_DIR) && "$(CURDIR)/$(IDEVICERESTORE)" \
+		$(if $(RESTORE_UDID),-u $(RESTORE_UDID),) \
+		$(if $(RESTORE_ECID),-i $(RESTORE_ECID),) \
+		-e -y ./iPhone*_Restore -t
 
 restore:
-	cd $(VM_DIR) && "$(CURDIR)/$(IDEVICERESTORE)" -e -y ./iPhone*_Restore
+	cd $(VM_DIR) && "$(CURDIR)/$(IDEVICERESTORE)" \
+		$(if $(RESTORE_UDID),-u $(RESTORE_UDID),) \
+		$(if $(RESTORE_ECID),-i $(RESTORE_ECID),) \
+		-e -y ./iPhone*_Restore
 
 # ═══════════════════════════════════════════════════════════════════
 # Ramdisk
@@ -223,7 +233,8 @@ ramdisk_build:
 	cd $(VM_DIR) && $(PYTHON) "$(CURDIR)/$(SCRIPTS)/ramdisk_build.py" .
 
 ramdisk_send:
-	cd $(VM_DIR) && IRECOVERY="$(CURDIR)/$(IRECOVERY)" zsh "$(CURDIR)/$(SCRIPTS)/ramdisk_send.sh"
+	cd $(VM_DIR) && IRECOVERY="$(CURDIR)/$(IRECOVERY)" IRECOVERY_ECID="$(IRECOVERY_ECID)" \
+		zsh "$(CURDIR)/$(SCRIPTS)/ramdisk_send.sh"
 
 # ═══════════════════════════════════════════════════════════════════
 # CFW
@@ -232,10 +243,10 @@ ramdisk_send:
 .PHONY: cfw_install cfw_install_dev cfw_install_jb
 
 cfw_install:
-	cd $(VM_DIR) && zsh "$(CURDIR)/$(SCRIPTS)/cfw_install.sh" .
+	cd $(VM_DIR) && SSH_PORT="$(SSH_PORT)" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install.sh" .
 
 cfw_install_dev:
-	cd $(VM_DIR) && zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_dev.sh" .
+	cd $(VM_DIR) && SSH_PORT="$(SSH_PORT)" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_dev.sh" .
 
 cfw_install_jb:
-	cd $(VM_DIR) && zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_jb.sh" .
+	cd $(VM_DIR) && SSH_PORT="$(SSH_PORT)" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_jb.sh" .
