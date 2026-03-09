@@ -19,6 +19,7 @@ from fw_patch import (
     patch_ibss,
     patch_kernelcache,
     patch_llb,
+    patch_dtree,
     patch_component,
 )
 from fw_patch_dev import patch_txm_dev
@@ -62,6 +63,13 @@ COMPONENTS = [
     ),
     ("TXM", True, ["Firmware/txm.iphoneos.research.im4p"], patch_txm_dev, True),
     ("kernelcache", True, ["kernelcache.research.vphone600"], patch_kernelcache, True),
+    (
+        "patch_dtree",
+        True,
+        ["Firmware/all_flash/DeviceTree.vphone600ap.im4p"],
+        patch_dtree,
+        False,
+    ),
 ]
 
 # JB extension components — applied AFTER base components on the same files.

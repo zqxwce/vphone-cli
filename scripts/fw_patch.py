@@ -18,6 +18,7 @@ Components patched (ALL dynamically — no hardcoded offsets):
   4. LLB              — serial labels + image4 callback + boot-args + rootfs + panic
   5. TXM              — trustcache bypass (mov x0, #0)
   6. kernelcache      — 25 patches (APFS, MAC, debugger, launch constraints, etc.)
+  7. patch_dtree      — vphone600 DeviceTree patch + repack
 
 Dependencies:
     pip install keystone-engine capstone pyimg4
@@ -32,6 +33,7 @@ from pyimg4 import IM4P
 from patchers.kernel import KernelPatcher
 from patchers.iboot import IBootPatcher
 from patchers.txm import TXMPatcher
+from dtree import patch_device_tree_payload
 
 # ══════════════════════════════════════════════════════════════════
 # Assembler helpers (for AVPBooter only — iBoot/TXM/kernel are
@@ -239,6 +241,13 @@ def patch_kernelcache(data):
     return n > 0
 
 
+def patch_dtree(data):
+    patched = patch_device_tree_payload(data)
+    data[:] = patched
+    print("  [+] DeviceTree patches applied dynamically")
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════
 # File discovery
 # ══════════════════════════════════════════════════════════════════
@@ -281,6 +290,13 @@ COMPONENTS = [
     ),
     ("TXM", True, ["Firmware/txm.iphoneos.research.im4p"], patch_txm, True),
     ("kernelcache", True, ["kernelcache.research.vphone600"], patch_kernelcache, True),
+    (
+        "patch_dtree",
+        True,
+        ["Firmware/all_flash/DeviceTree.vphone600ap.im4p"],
+        patch_dtree,
+        False,
+    ),
 ]
 
 
