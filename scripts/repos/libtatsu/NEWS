@@ -1,0 +1,48 @@
+Version 1.0.5
+~~~~~~~~~~~~~
+
+Changes:
+- Fix compilation on MSVC
+- Add extern "C" guards to public headers
+- Update auth client version
+
+
+Version 1.0.4
+~~~~~~~~~~~~~
+
+Changes:
+- Updated for iPhone 16 device family
+
+
+Version 1.0.3
+~~~~~~~~~~~~~
+
+Fixes:
+- Fix TSS request generation for non-img4 requests
+
+
+Version 1.0.2
+~~~~~~~~~~~~~
+
+Bugfix release
+
+Fixes:
+- Revert strict 'Trusted' check and only bail out when not trusted and without RestoreRequestRules;
+  this caused TSS requests to be incomplete resulting in restore failures.
+
+Changes:
+- Abort if we get an unhandled status code, instead of retrying
+- Print debug plist data in XML format
+
+
+Version 1.0.1
+~~~~~~~~~~~~~
+
+Changes:
+- tss: Only consider components that are 'Trusted'
+
+
+Version 1.0.0
+~~~~~~~~~~~~~
+
+First release.

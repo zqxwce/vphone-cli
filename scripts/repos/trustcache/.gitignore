@@ -1,0 +1,7 @@
+a.out
+*.o
+*.bin
+trustcache
+.vscode
+*.tc
+linux-sysroot

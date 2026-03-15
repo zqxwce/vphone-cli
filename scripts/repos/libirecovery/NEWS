@@ -1,0 +1,171 @@
+Version 1.3.1
+~~~~~~~~~~~~~
+
+* Device database changes:
+  - Support iPad Pro M5 family devices
+  - Support Apple Vision Pro M5
+  - Support MacBook Pro 14-inch M5
+
+* Bug Fixes:
+    Fix: array initialization compatibility with MSVC
+
+
+Version 1.3.0
+~~~~~~~~~~~~~
+
+* Changes:
+  - Switch to better initializer strategy
+  - Allow building without readline support for the irecovery tool
+  - Added support for iOS 1 and iOS 2 recovery mode (Linux, macOS)
+
+* Device database changes:
+  - Support iPhone 17 family devices
+  - Support Watch 11 / SE3 / Ultra3 models
+  - Support March 2025 iPad and Mac models
+  - Support iPhone 16e
+  - Support November 2024 Mac models
+  - Support iPad mini (A17 Pro)
+
+* Bug Fixes:
+  - IOKit: Fix race condition when trying to delete runloop before it even started
+
+
+Version 1.2.1
+~~~~~~~~~~~~~
+
+* Changes:
+  - Make sure IRECV_DEVICE_REMOVE event has the mode set the device was in
+  - KIS: Add some retry loops around open/set config/set interface operations
+
+* Device database changes:
+  - Support Apple Watch Series 10 and iPhone 16 models
+  - Add iPad Air (M2) and iPad Pro (M4) models
+
+* Bug Fixes:
+  - Windows: Fix crash due to access to uninitialized data
+
+
+Version 1.2.0
+~~~~~~~~~~~~~
+
+* Changes:
+  - Allow building --without-tools
+  - Add KIS (aka Debug USB) support for macOS, Linux, and Windows
+    (Windows note: requires up-to-date AppleMobileDeviceSupport64.msi package installed)
+  - Add Port DFU support (restore procedure is handled externally)
+  - irecovery: Print detailed mode for -q and -m commands
+  - Overall code cleanup and de-duplication
+  - Windows-specific code cleanup and improvements
+
+* Device database changes:
+  - Add Mac Pro, Mac Studio (M2) and MacBook Air (M2) models
+  - Add iPhone 15 family
+  - Add Apple Watch Series 9 and Ultra 2 models
+  - Add November 2023 iMac and MacBook Pro models
+  - Add support for Apple Vision Pro (RealityDevice14,1)
+
+* Bug Fixes:
+  - A few minor Windows-specific bug fixes
+
+Version 1.1.0
+~~~~~~~~~~~~~
+
+* Changes:
+  - Remove duplicated thread/collection code and use new libimobiledevice-glue instead
+  - Add new `irecv_send_command_breq` (for M1 restoring)
+  - Add new `setenvnp` command
+  - Add support for iPad 8 and iPad Air 4 models
+  - Add all current Apple Watch models (device lookup)
+  - Add support for HomePod and HomePod mini (device lookup)
+  - Add support for Apple Silicon/M1 Macs (device lookup) and remaining T2/iBridge devices
+  - Add iMac 24-inch M1 models
+  - Add iPad Pro 11-inch (3rd gen) and iPad Pro 12.9-inch (5th gen) devices
+  - Add Apple TV 4K (2nd gen)
+  - Add iPhone 13 family
+  - Add 9th gen iPad devices
+  - Add 6th gen iPad mini
+  - Add Apple Watch Series 7
+  - Add MacBook Pro 2021 models (device lookup)
+  - Add iPad Air (5th gen)
+  - Add iPhone SE (3rd gen)
+  - Add Mac Studio
+  - Add Studio Display (device lookup)
+  - Add device ID for macOS 12 Apple Silicon VMs
+  - Add M2 MacBook models
+  - Add iPhone 14 family
+  - Add Apple Watch SE 2, Series 8 and Ultra family
+  - Add iPad (10th gen)
+  - Add iPad Pro 11-inch (4th gen) and iPad Pro 12.9-inch (6th gen)
+  - Add Apple TV 4K 3rd gen
+  - Add January 2023 Macs and 2nd generation HomePod models
+  - [Windows] Add support for newer drivers
+  - irecovery: Add new "--devices" option to list internal device data
+  - irecovery: Output product, model and marketing name for device information
+
+* Bug Fixes:
+  - Send a ZLP in recovery mode if the buffer size is a multiple of 512
+  - Make sure DEVICE_ADD events are sent to additional event listeners
+  - [Windows] Use ANSI versions for SetupDI and CreateFile API to prevent errors when compiling with unicode support
+  - irecovery: Fix sending certain commands
+
+Version 1.0.0
+~~~~~~~~~~~~~
+
+* Changes:
+  - Output basic device information after connecting
+  - Remove obsolete "in-tree" copy of libusb-1.0
+  - Improve source code directory structure
+  - Clean up and update of build system files
+  - Major code refactoring
+  - Add getters to retrieve device model information
+  - Change exploit related wording to more accurate limera1n
+  - Various improvements/fixes for win32 build
+  - Add support for latest device models
+  - Fix some memory leaks
+  - Add requirement for autoconf 2.64
+  - Support IOKit on OSX (removes dependency on libusb)
+  - Add DFU mode error handling
+  - Add udev rules to allow non-root device access
+  - Support ECID in hex or decimal format
+  - Fix various compiler warnings
+  - Add device add/remove event subscription interface
+  - Convert README to markdown
+  - Print PWND string if present
+  - Add support for Apple T2 processors
+  - Allow compiling without USB functionality
+  - Support checkra1n DFU mode devices
+  - Allow toggling debug level using "LIBIRECOVERY_DEBUG_LEVEL" environment
+    variable
+  - Add long argument name variants to irecovery
+  - Add new "--version" argument to irecovery
+  - Add support for Apple Watch 1st gen devices
+  - Add support for missing iPad4,3 model and fix wrong device information
+    iPad7 variants
+  - Improve README.md with project description, installation, contributing and
+    usage sections
+  - Rename library and all related files by adding an API version resulting
+    in "libirecovery-1.0"
+
+Version 0.1.1
+~~~~~~~~~~~~~
+
+* Changes:
+  - Add serial number and imei getters
+  - Improve USB communication stability
+  - Add support for WTF mode
+  - Add option to target device by ECID
+  - Add nonce getter
+  - Improve win32 device detection and mingw compatibility
+  - Add support for new device models
+  - Switch to autotools build system instead of plain Makefile
+  - Expose control and bulk transfer methods in public interface
+  - Improve maintainability of device model information
+  - Change license to LGPL 2.1
+
+Version 0.1.0
+~~~~~~~~~~~~~
+
+* Changes:
+  - Implement initial interface and device communication
+  - Add basic irecovery tool
+  - Setup build system
