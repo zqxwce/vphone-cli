@@ -85,7 +85,7 @@ Boot into Recovery (long press power button), open Terminal, then choose one set
 brew install ideviceinstaller wget gnu-tar openssl@3 ldid-procursus sshpass keystone autoconf automake pkg-config libtool cmake
 ```
 
-**Submodules** — this repo uses a git submodule for resource archives. Clone with:
+**Submodules** — this repo uses git submodules for resources, vendored Swift deps, and toolchain sources under `scripts/repos/`. Clone with:
 
 ```bash
 git clone --recurse-submodules https://github.com/Lakr233/vphone-cli.git
@@ -101,7 +101,7 @@ make setup_machine            # full automation through "First Boot" (includes r
 ## Manual Setup
 
 ```bash
-make setup_tools              # install brew deps, build trustcache, clone insert_dylib, build libimobiledevice, create Python venv
+make setup_tools              # install brew deps, build trustcache + insert_dylib + libimobiledevice from submodule sources, create Python venv
 make build                    # build + sign vphone-cli
 make vm_new                   # create VM directory with manifest (config.plist)
 # options: CPU=8 MEMORY=8192 DISK_SIZE=64

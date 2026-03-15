@@ -53,7 +53,7 @@ help:
 	@echo "             SUDO_PASSWORD=...         Preload sudo credential for setup flow"
 	@echo ""
 	@echo "Setup (one-time):"
-	@echo "  make setup_tools             Install all tools (brew, trustcache, insert_dylib, libimobiledevice, venv)"
+	@echo "  make setup_tools             Install all tools (brew, submodule-sourced trustcache/insert_dylib/libimobiledevice, venv)"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build                   Build + sign vphone-cli"

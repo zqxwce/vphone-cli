@@ -2,26 +2,23 @@
 # setup_tools.sh — Install all required host tools for vphone-cli
 #
 # Installs brew packages, builds trustcache from source,
-# clones insert_dylib, builds libimobiledevice toolchain, and creates Python venv.
+# builds insert_dylib from submodule source, builds libimobiledevice toolchain, and creates Python venv.
 #
 # Run: make setup_tools
 
 set -euo pipefail
 
-SCRIPT_DIR="${0:a:h}"
-PROJECT_DIR="${SCRIPT_DIR:h}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TOOLS_PREFIX="${TOOLS_PREFIX:-$PROJECT_DIR/.tools}"
+REPOS_DIR="$SCRIPT_DIR/repos"
 
-clone_or_update() {
-    local url="$1"
-    local dir="$2"
+ensure_repo_submodule() {
+    local rel_path="$1"
+    local abs_path="$PROJECT_DIR/$rel_path"
 
-    if [[ -d "$dir/.git" ]]; then
-        git -C "$dir" fetch --depth 1 origin --quiet
-        git -C "$dir" reset --hard FETCH_HEAD --quiet
-        git -C "$dir" clean -fdx --quiet
-    else
-        git clone --depth 1 "$url" "$dir" --quiet
+    if [[ ! -e "$abs_path/.git" ]]; then
+        git -C "$PROJECT_DIR" submodule update --init --recursive "$rel_path"
     fi
 }
 
@@ -53,11 +50,14 @@ TRUSTCACHE_BIN="$TOOLS_PREFIX/bin/trustcache"
 if [[ -x "$TRUSTCACHE_BIN" ]]; then
     echo "  Already built: $TRUSTCACHE_BIN"
 else
-    echo "  Building from source (CRKatri/trustcache)..."
+    echo "  Building from submodule source (scripts/repos/trustcache)..."
+    ensure_repo_submodule "scripts/repos/trustcache"
+
     BUILD_DIR=$(mktemp -d)
     trap "rm -rf '$BUILD_DIR'" EXIT
 
-    git clone --depth 1 https://github.com/CRKatri/trustcache.git "$BUILD_DIR/trustcache" --quiet
+    ditto "$REPOS_DIR/trustcache" "$BUILD_DIR/trustcache"
+    rm -rf "$BUILD_DIR/trustcache/.git"
 
     OPENSSL_PREFIX="$(brew --prefix openssl@3)"
     make -C "$BUILD_DIR/trustcache" \
@@ -79,9 +79,8 @@ INSERT_DYLIB_BIN="$TOOLS_PREFIX/bin/insert_dylib"
 if [[ -x "$INSERT_DYLIB_BIN" ]]; then
     echo "  Already built: $INSERT_DYLIB_BIN"
 else
-    INSERT_DYLIB_DIR="$TOOLS_PREFIX/src/insert_dylib"
-    mkdir -p "${INSERT_DYLIB_DIR:h}"
-    clone_or_update "https://github.com/tyilo/insert_dylib" "$INSERT_DYLIB_DIR"
+    INSERT_DYLIB_DIR="$REPOS_DIR/insert_dylib"
+    ensure_repo_submodule "scripts/repos/insert_dylib"
     echo "  Building insert_dylib..."
     mkdir -p "$TOOLS_PREFIX/bin"
     clang -o "$INSERT_DYLIB_BIN" "$INSERT_DYLIB_DIR/insert_dylib/main.c" -framework Security -O2
