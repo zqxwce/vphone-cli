@@ -114,6 +114,9 @@ public final class CryptexFilesystemPatcher: Patcher {
             
             print("- Fix Dyld Cache")
             try addDyldSymlinks(targetMount: targetMount)
+            
+            print("- Fix GPU Driver")
+            try addGpuDriver(targetMount: targetMount)
         }
         
         print("- Finalizing merged image")
@@ -128,6 +131,40 @@ public final class CryptexFilesystemPatcher: Patcher {
         }
         try FileManager.default.moveItem(at: finalFile, to: finalDestination)
         return (newDmgPath, finalDestination)
+    }
+    
+    func addGpuDriver(targetMount: String) throws {
+        let target = URL.init(filePath: targetMount)
+        let tmpDir = try createTmpDir()
+        _ = try runProcess("/usr/bin/tar", [
+            "--zstd", "-xf", "./scripts/resources/cfw_input.tar.zst", "-C", tmpDir.path
+        ])
+        
+        let gpuTarPath = tmpDir.appending(path: "cfw_input/custom/AppleParavirtGPUMetalIOGPUFamily.tar")
+        _ = try runProcess("/usr/bin/tar", [
+            "--preserve-permissions",
+            "-xf", gpuTarPath.path,
+            "-C", target.path
+        ])
+        
+        let bundle = target.appending(path: "/System/Library/Extensions/AppleParavirtGPUMetalIOGPUFamily.bundle")
+        // Clean macOS resource fork files (._* files from tar xattrs)
+        _ = try? runProcess("/usr/bin/find", [bundle.path, "-name", "._*", "-delete"])
+        _ = try runProcess("/usr/sbin/chown", ["-R", "0:0", bundle.path])
+        for path in [
+            bundle.path,
+            bundle.appending(path: "/libAppleParavirtCompilerPluginIOGPUFamily.dylib").path,
+            bundle.appending(path: "/AppleParavirtGPUMetalIOGPUFamily").path,
+            bundle.appending(path: "/_CodeSignature").path,
+        ] {
+            _ = try runProcess("/bin/chmod", ["0755", path])
+        }
+        for path in [
+            bundle.appending(path: "/_CodeSignature/CodeResources").path,
+            bundle.appending(path: "/Info.plist").path
+        ] {
+            _ = try runProcess("/bin/chmod", ["0644", path])
+        }
     }
     
     func addDyldSymlinks(targetMount: String) throws {
