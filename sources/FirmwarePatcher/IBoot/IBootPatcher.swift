@@ -34,7 +34,6 @@ public class IBootPatcher: Patcher {
 
     public let component: String
     public let verbose: Bool
-    public let onlySerial: Bool
 
     let buffer: BinaryBuffer
     let mode: Mode
@@ -43,12 +42,11 @@ public class IBootPatcher: Patcher {
 
     // MARK: - Init
 
-    public init(data: Data, mode: Mode, verbose: Bool = true, onlySerial: Bool = false) {
+    public init(data: Data, mode: Mode, verbose: Bool = true) {
         buffer = BinaryBuffer(data)
         self.mode = mode
         component = mode.rawValue
         self.verbose = verbose
-        self.onlySerial = onlySerial
     }
 
     // MARK: - Patcher Protocol
@@ -57,15 +55,13 @@ public class IBootPatcher: Patcher {
         patches = []
 
         patchSerialLabels()
-        if !onlySerial {
-            patchImage4Callback()
-        }
+        patchImage4Callback()
 
         if mode == .ibec || mode == .llb {
             patchBootArgs()
         }
 
-        if !onlySerial && mode == .llb {
+        if mode == .llb {
             patchRootfssBypass()
             patchPanicBypass()
         }

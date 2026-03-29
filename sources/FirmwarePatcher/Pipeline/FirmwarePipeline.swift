@@ -136,6 +136,8 @@ public final class FirmwarePipeline {
                 componentRecords.append(contentsOf: records)
                 if let deviceTreePatcher = patcher as? DeviceTreePatcher {
                     currentData = deviceTreePatcher.patchedData
+                } else if let filesystemPatcher = patcher as? CryptexFilesystemPatcher {
+                    currentData = filesystemPatcher.patchedData
                 } else if let manifestPatcher = patcher as? ManifestHashPatcher {
                     currentData = manifestPatcher.patchedData
                 } else {
@@ -208,24 +210,38 @@ public final class FirmwarePipeline {
             }()
         ))
 
-        // 3. iBEC — In the regular variant, we only want to enable the serial output.
+        // 3. iBEC — The automatic patching is disabled for the regular variant (you can still just place a custom component there).
         components.append(ComponentDescriptor(
             name: "iBEC",
             inRestoreDir: true,
             searchPatterns: ["Firmware/dfu/iBEC.vresearch101.RELEASE.im4p"],
-            patcherFactories: [{ data, verbose in
-                IBootPatcher(data: data, mode: .ibec, verbose: verbose, onlySerial: self.variant == .regular)
-            }]
+            patcherFactories: {
+                return switch variant {
+                case .regular:
+                    []
+                case .dev, .jb:
+                    [{ data, verbose in
+                        IBootPatcher(data: data, mode: .ibec, verbose: verbose)
+                    }]
+                }
+            }()
         ))
 
-        // 4. LLB — In the regular variant, we only want to enable the serial output.
+        // 4. LLB — The automatic patching is disabled for the regular variant (you can still just place a custom component there).
         components.append(ComponentDescriptor(
             name: "LLB",
             inRestoreDir: true,
             searchPatterns: ["Firmware/all_flash/LLB.vresearch101.RELEASE.im4p"],
-            patcherFactories: [{ data, verbose in
-                IBootPatcher(data: data, mode: .llb, verbose: verbose, onlySerial: self.variant == .regular)
-            }]
+            patcherFactories: {
+                return switch variant {
+                case .regular:
+                    []
+                case .dev, .jb:
+                    [{ data, verbose in
+                        IBootPatcher(data: data, mode: .llb, verbose: verbose)
+                    }]
+                }
+            }()
         ))
 
         // 5. TXM — dev/jb variants use TXMDevPatcher (adds entitlements, debugger, dev-mode)
@@ -280,8 +296,25 @@ public final class FirmwarePipeline {
                 DeviceTreePatcher(data: data, verbose: verbose)
             }]
         ))
+        
+        // 8. Filesystem
+        components.append(ComponentDescriptor(
+            name: "Filesystem",
+            inRestoreDir: true,
+            searchPatterns: ["BuildManifest.plist"],
+            patcherFactories: {
+                return switch variant {
+                case .regular:
+                    [{ data, verbose in
+                        CryptexFilesystemPatcher(buildManiest: data, restoreDir: try! self.findRestoreDirectory(), verbose: verbose)
+                    }]
+                case .dev, .jb:
+                    []
+                }
+            }()
+        ))
 
-        // 8. Firmware Manifest - Only required when excluding the img4 signature patches.
+        // 9. Firmware Manifest - Only required when excluding the img4 signature patches.
         components.append(ComponentDescriptor(
             name: "Manifest",
             inRestoreDir: true,
