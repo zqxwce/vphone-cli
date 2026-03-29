@@ -88,13 +88,13 @@ struct VPhoneBootCLI: ParsableCommand {
 
         return VPhoneVirtualMachine.Options(
             configURL: config,
-            romURL: manifest.resolve(path: manifest.romImages.avpBooter, in: vmDir),
+            romURL: manifest.romImages != nil ? manifest.resolve(path: manifest.romImages!.avpBooter, in: vmDir) : nil,
             nvramURL: manifest.resolve(path: manifest.nvramStorage, in: vmDir),
             diskURL: manifest.resolve(path: manifest.diskImage, in: vmDir),
             cpuCount: Int(manifest.cpuCount),
             memorySize: manifest.memorySize,
             sepStorageURL: manifest.resolve(path: manifest.sepStorage, in: vmDir),
-            sepRomURL: manifest.resolve(path: manifest.romImages.avpSEPBooter, in: vmDir),
+            sepRomURL: manifest.romImages != nil ? manifest.resolve(path: manifest.romImages!.avpSEPBooter, in: vmDir) : nil,
             screenWidth: manifest.screenConfig.width,
             screenHeight: manifest.screenConfig.height,
             screenPPI: manifest.screenConfig.pixelsPerInch,

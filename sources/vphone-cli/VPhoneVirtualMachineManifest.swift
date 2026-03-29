@@ -44,7 +44,7 @@ struct VPhoneVirtualMachineManifest: Codable {
     // MARK: - ROMs
 
     /// ROM image paths
-    let romImages: ROMImages
+    let romImages: ROMImages?
 
     // MARK: - SEP
 
@@ -107,7 +107,7 @@ struct VPhoneVirtualMachineManifest: Codable {
         networkConfig: NetworkConfig = .default,
         diskImage: String = "Disk.img",
         nvramStorage: String = "nvram.bin",
-        romImages: ROMImages,
+        romImages: ROMImages?,
         sepStorage: String = "SEPStorage"
     ) {
         self.platformType = platformType

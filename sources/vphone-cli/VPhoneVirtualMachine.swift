@@ -15,13 +15,13 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
 
     struct Options {
         var configURL: URL
-        var romURL: URL
+        var romURL: URL?
         var nvramURL: URL
         var diskURL: URL
         var cpuCount: Int = 8
         var memorySize: UInt64 = 8 * 1024 * 1024 * 1024
         var sepStorageURL: URL
-        var sepRomURL: URL
+        var sepRomURL: URL?
         var screenWidth: Int = 1290
         var screenHeight: Int = 2796
         var screenPPI: Int = 460
@@ -134,7 +134,9 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
 
         // --- Boot loader with custom ROM ---
         let bootloader = VZMacOSBootLoader()
-        Dynamic(bootloader)._setROMURL(options.romURL)
+        if let romURL = options.romURL {
+            Dynamic(bootloader)._setROMURL(romURL)
+        }
 
         // --- VM Configuration ---
         let config = VZVirtualMachineConfiguration()
@@ -250,7 +252,9 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
 
         // Coprocessors
         let sepConfig = Dynamic._VZSEPCoprocessorConfiguration(storageURL: options.sepStorageURL)
-        sepConfig.setRomBinaryURL(options.sepRomURL)
+        if let sepRomURL = options.sepRomURL {
+            sepConfig.setRomBinaryURL(sepRomURL)
+        }
         sepConfig.setDebugStub(Dynamic._VZGDBDebugStubConfiguration().asObject)
         if let sepObj = sepConfig.asObject {
             Dynamic(config)._setCoprocessors([sepObj])
