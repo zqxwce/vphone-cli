@@ -168,9 +168,16 @@ public final class FirmwarePipeline {
             name: "AVPBooter",
             inRestoreDir: false,
             searchPatterns: ["AVPBooter*.bin"],
-            patcherFactories: [{ data, verbose in
-                AVPBooterPatcher(data: data, verbose: verbose)
-            }]
+            patcherFactories: {
+                if variant != .regular {
+                    return [
+                        { data, verbose in
+                            AVPBooterPatcher(data: data, verbose: verbose)
+                        },
+                    ]
+                }
+                return []
+            }()
         ))
 
         // 2. iBSS — JB variant runs the base iBSS patcher, then the nonce-skip extension.
@@ -179,8 +186,15 @@ public final class FirmwarePipeline {
             inRestoreDir: true,
             searchPatterns: ["Firmware/dfu/iBSS.vresearch101.RELEASE.im4p"],
             patcherFactories: {
-                if variant == .jb {
-                    return [
+                return switch variant {
+                case .regular:
+                    []
+                case .dev:
+                    [{ data, verbose in
+                        IBootPatcher(data: data, mode: .ibss, verbose: verbose)
+                    }]
+                case .jb:
+                    [
                         { data, verbose in
                             IBootPatcher(data: data, mode: .ibss, verbose: verbose)
                         },
@@ -189,29 +203,26 @@ public final class FirmwarePipeline {
                         },
                     ]
                 }
-                return [{ data, verbose in
-                    IBootPatcher(data: data, mode: .ibss, verbose: verbose)
-                }]
             }()
         ))
 
-        // 3. iBEC — same for all variants
+        // 3. iBEC — In the regular variant, we only want to enable the serial output.
         components.append(ComponentDescriptor(
             name: "iBEC",
             inRestoreDir: true,
             searchPatterns: ["Firmware/dfu/iBEC.vresearch101.RELEASE.im4p"],
             patcherFactories: [{ data, verbose in
-                IBootPatcher(data: data, mode: .ibec, verbose: verbose)
+                IBootPatcher(data: data, mode: .ibec, verbose: verbose, onlySerial: self.variant == .regular)
             }]
         ))
 
-        // 4. LLB — same for all variants
+        // 4. LLB — In the regular variant, we only want to enable the serial output.
         components.append(ComponentDescriptor(
             name: "LLB",
             inRestoreDir: true,
             searchPatterns: ["Firmware/all_flash/LLB.vresearch101.RELEASE.im4p"],
             patcherFactories: [{ data, verbose in
-                IBootPatcher(data: data, mode: .llb, verbose: verbose)
+                IBootPatcher(data: data, mode: .llb, verbose: verbose, onlySerial: self.variant == .regular)
             }]
         ))
 
@@ -220,12 +231,16 @@ public final class FirmwarePipeline {
             name: "TXM",
             inRestoreDir: true,
             searchPatterns: ["Firmware/txm.iphoneos.research.im4p"],
-            patcherFactories: [{ [variant] data, verbose in
-                if variant == .dev || variant == .jb {
-                    return TXMDevPatcher(data: data, verbose: verbose)
+            patcherFactories: {
+                return switch variant {
+                case .regular:
+                    []
+                case .dev, .jb:
+                    [{ data, verbose in
+                        TXMDevPatcher(data: data, verbose: verbose)
+                    }]
                 }
-                return TXMPatcher(data: data, verbose: verbose)
-            }]
+            }()
         ))
 
         // 6. Kernel — JB variant runs base kernel patches first, then JB extensions.
@@ -234,8 +249,15 @@ public final class FirmwarePipeline {
             inRestoreDir: true,
             searchPatterns: ["kernelcache.research.vphone600"],
             patcherFactories: {
-                if variant == .jb {
-                    return [
+                return switch variant {
+                case .regular:
+                    []
+                case .dev:
+                    [{ data, verbose in
+                        KernelPatcher(data: data, verbose: verbose)
+                    }]
+                case .jb:
+                    [
                         { data, verbose in
                             KernelPatcher(data: data, verbose: verbose)
                         },
@@ -244,9 +266,6 @@ public final class FirmwarePipeline {
                         },
                     ]
                 }
-                return [{ data, verbose in
-                    KernelPatcher(data: data, verbose: verbose)
-                }]
             }()
         ))
 
