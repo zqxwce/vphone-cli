@@ -52,12 +52,13 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         print("=== vphone-cli ===")
-        print("ROM   : \(options.romURL?.path ?? "None")")
-        print("Disk  : \(options.diskURL.path)")
-        print("NVRAM : \(options.nvramURL.path)")
-        print("Config: \(options.configURL.path)")
-        print("CPU   : \(options.cpuCount)")
-        print("Memory: \(options.memorySize / 1024 / 1024) MB")
+        print("Variant : \(options.variant)")
+        print("ROM     : \(options.romURL?.path ?? "None")")
+        print("Disk    : \(options.diskURL.path)")
+        print("NVRAM   : \(options.nvramURL.path)")
+        print("Config  : \(options.configURL.path)")
+        print("CPU     : \(options.cpuCount)")
+        print("Memory  : \(options.memorySize / 1024 / 1024) MB")
         print(
             "Screen: \(options.screenWidth)x\(options.screenHeight) @ \(options.screenPPI) PPI (scale \(options.screenScale)x)"
         )
@@ -76,7 +77,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
 
         try await vm.start(forceDFU: cli.dfu)
 
-        let control = VPhoneControl()
+        let control = VPhoneControl(variant: options.variant)
         self.control = control
         if !cli.dfu {
             let vphonedURL = URL(fileURLWithPath: cli.vphonedBin)

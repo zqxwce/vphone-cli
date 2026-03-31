@@ -19,12 +19,12 @@ Boot a virtual iPhone (iOS 26) via Apple's Virtualization.framework using PCC re
 
 Four patch variants are available with increasing levels of security bypass:
 
-| Variant         | Boot Chain  |    CFW    | Make Targets                       |
-| --------------- | :---------: | :-------: | ---------------------------------- |
-| **Patchless**   | 2 patches   | 2 phases  | `fw_patch_less` (sudo)         |
-| **Regular**     | 41 patches  | 10 phases | `fw_patch` + `cfw_install`         |
-| **Development** | 52 patches  | 12 phases | `fw_patch_dev` + `cfw_install_dev` |
-| **Jailbreak**   | 112 patches | 14 phases | `fw_patch_jb` + `cfw_install_jb`   |
+| Variant         | Boot Chain  |    CFW    | Make Targets                        |
+| --------------- | :---------: | :-------: | ----------------------------------- |
+| **Patchless**   | 3 patches   | 2 phases  | `fw_patch_less` (root) + `boot_less`|
+| **Regular**     | 41 patches  | 10 phases | `fw_patch` + `cfw_install`          |
+| **Development** | 52 patches  | 12 phases | `fw_patch_dev` + `cfw_install_dev`  |
+| **Jailbreak**   | 112 patches | 14 phases | `fw_patch_jb` + `cfw_install_jb`    |
 
 > JB finalization (symlinks, Sileo, apt, TrollStore) runs automatically on first boot via `/cores/vphone_jb_setup.sh` LaunchDaemon. Monitor progress: `/var/log/vphone_jb_setup.log`.
 

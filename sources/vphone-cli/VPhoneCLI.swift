@@ -43,6 +43,9 @@ struct VPhoneBootCLI: ParsableCommand {
 
     @Option(help: "Path to signed vphoned binary for guest auto-update")
     var vphonedBin: String = ".vphoned.signed"
+    
+    @Option(help: "Firmware variant to execute.")
+    var variant: PatchFirmwareCLI.VariantOption = .regular
 
     @Option(
         help: "Automatically install the given IPA/TIPA after the guest control channel connects. Unavailable with --dfu.",
@@ -99,7 +102,8 @@ struct VPhoneBootCLI: ParsableCommand {
             screenHeight: manifest.screenConfig.height,
             screenPPI: manifest.screenConfig.pixelsPerInch,
             screenScale: manifest.screenConfig.scale,
-            kernelDebugPort: kernelDebugPort
+            kernelDebugPort: kernelDebugPort,
+            variant: variant.virtualMachineVariant
         )
     }
 
@@ -114,6 +118,15 @@ struct PatchFirmwareCLI: ParsableCommand {
         case jb
 
         var pipelineVariant: FirmwarePipeline.Variant {
+            switch self {
+            case .less: .less
+            case .regular: .regular
+            case .dev: .dev
+            case .jb: .jb
+            }
+        }
+        
+        var virtualMachineVariant: VPhoneVirtualMachine.Variant {
             switch self {
             case .less: .less
             case .regular: .regular

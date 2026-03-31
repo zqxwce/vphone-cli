@@ -41,7 +41,12 @@ class VPhoneControl {
     private var nextRequestId: UInt64 = 0
     private var connectionAttemptToken: UInt64 = 0
     private var reconnectWorkItem: DispatchWorkItem?
+    public var variant: VPhoneVirtualMachine.Variant = .regular
 
+    init(variant: VPhoneVirtualMachine.Variant) {
+        self.variant = variant
+    }
+    
     // MARK: - Pending Requests
 
     /// Callback for a pending request. Called on the read-loop queue.
@@ -211,7 +216,7 @@ class VPhoneControl {
                 self.isConnected = true
                 print("[control] connected to \(name) v\(version), caps: \(caps)")
 
-                if needUpdate {
+                if needUpdate && self.variant != .less {
                     self.pushUpdate(fd: fd)
                 } else {
                     self.startReadLoop(fd: fd, attemptToken: attemptToken)

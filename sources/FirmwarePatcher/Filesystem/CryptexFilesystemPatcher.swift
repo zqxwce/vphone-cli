@@ -127,6 +127,10 @@ public final class CryptexFilesystemPatcher: Patcher {
             
             print("- Patch Mobile Activation")
             try patchMobileActivation(targetMount: targetMount, cfwInput: cfwInputPath)
+            
+            print("- Add vphoned")
+            try addVphoned(targetMount: targetMount, cfwInput: cfwInputPath)
+            try patchLaunchdCacheLoader(targetMount: targetMount, cfwInput: cfwInputPath)
         }
         
         print("- Finalizing merged image")
@@ -141,6 +145,98 @@ public final class CryptexFilesystemPatcher: Patcher {
         }
         try FileManager.default.moveItem(at: finalFile, to: finalDestination)
         return (newDmgPath, finalDestination)
+    }
+    
+    func patchLaunchdCacheLoader(targetMount: String, cfwInput: URL) throws {
+        let target = URL.init(filePath: targetMount)
+        let launchdCacheLoaderPath = target.appending(path: "/usr/libexec/launchd_cache_loader")
+        let pythonPath = vphoneCliDirectory.appending(path: ".venv/bin/python3")
+        let patcherPath = vphoneCliDirectory.appending(path: "scripts/patchers/cfw.py")
+        _ = try runProcess(pythonPath.path, [
+            patcherPath.path, "patch-launchd-cache-loader",
+            launchdCacheLoaderPath.path
+        ])
+        _ = try runProcess("/bin/chmod", ["0755", launchdCacheLoaderPath.path])
+        
+        let signingCertificatePath = cfwInput.appending(path: "cfw_input/signcert.p12")
+        _ = try runProcess("/opt/homebrew/bin/ldid", [
+            "-S", "-M", "-K\(signingCertificatePath.path)",
+            "-Icom.apple.launchd_cache_loader",
+            launchdCacheLoaderPath.path
+        ])
+    }
+    
+    func addVphoned(targetMount: String, cfwInput: URL) throws {
+        let target = URL.init(filePath: targetMount)
+        let scriptDir = vphoneCliDirectory.appending(path: "scripts")
+        let vphonedSrc = scriptDir.appendingPathComponent("vphoned")
+        let vphonedBin = vphonedSrc.appendingPathComponent("vphoned")
+
+        try buildVphoned(vphonedSrc: vphonedSrc, vphonedBin: vphonedBin)
+        
+        // Sign
+        let targetBin = target.appending(path: "/usr/bin/vphoned")
+        try FileManager.default.copyItem(at: vphonedBin, to: targetBin)
+        let signingCertificatePath = cfwInput.appending(path: "cfw_input/signcert.p12")
+        _ = try runProcess("/opt/homebrew/bin/ldid", [
+            "-S\(vphonedSrc.appendingPathComponent("entitlements.plist").path)",
+            "-M", "-K\(signingCertificatePath.path)",
+            targetBin.path
+        ])
+        _ = try runProcess("/bin/chmod", ["0755", targetBin.path])
+        
+        let signedCopyPath = self.restoreDir.deletingLastPathComponent().appending(path: ".vphoned.signed")
+        if FileManager.default.fileExists(atPath: signedCopyPath.path) {
+            try FileManager.default.removeItem(at: signedCopyPath)
+        }
+        try FileManager.default.copyItem(at: targetBin, to: signedCopyPath)
+        
+        // Register Launch Daemon
+        let vphonedLaunchdPlist = vphonedSrc.appending(path: "vphoned.plist")
+        try FileManager.default.copyItem(at: vphonedLaunchdPlist,
+                                         to: target.appending(path: "System/Library/LaunchDaemons/vphoned.plist"))
+        let tmpDir = try createTmpDir()
+        let launchdPath = tmpDir.appending(path: "launchd.plist")
+        let launchDaemonsPath = tmpDir.appending(path: "launchDaemons")
+        let launchdOgPath = target.appending(path: "/System/Library/xpc/launchd.plist")
+        try FileManager.default.createDirectory(at: launchDaemonsPath, withIntermediateDirectories: false)
+        try FileManager.default.moveItem(at: launchdOgPath, to: launchdPath)
+        try FileManager.default.copyItem(at: vphonedLaunchdPlist, to: launchDaemonsPath.appending(path: vphonedLaunchdPlist.lastPathComponent))
+        _ = try runProcess(vphoneCliDirectory.appending(path: ".venv/bin/python3").path, [
+            vphoneCliDirectory.appending(path: "scripts/patchers/cfw.py").path, "inject-daemons",
+            launchdPath.path, launchDaemonsPath.path
+        ])
+        try FileManager.default.moveItem(at: launchdPath, to: launchdOgPath)
+        _ = try runProcess("/bin/chmod", ["0644", launchdOgPath.path])
+    }
+    
+    func buildVphoned(vphonedSrc: URL, vphonedBin: URL) throws {
+        let srcURLs = try FileManager.default.contentsOfDirectory(
+            at: vphonedSrc,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ).filter { $0.pathExtension == "m" }
+
+        var args = [
+            "-sdk", "iphoneos", "clang",
+            "-arch", "arm64",
+            "-Os",
+            "-fobjc-arc",
+            "-I\(vphonedSrc.path)",
+            "-I\(vphonedSrc.appendingPathComponent("vendor/libarchive").path)",
+            "-DLESS=1",
+            "-o", vphonedBin.path
+        ]
+        args.append(contentsOf: srcURLs.map { $0.path })
+        args.append(contentsOf: [
+            "-larchive",
+            "-lsqlite3",
+            "-framework", "Foundation",
+            "-framework", "Security",
+            "-framework", "CoreServices"
+        ])
+        
+        _ = try runProcess("/usr/bin/xcrun", args)
     }
     
     func addGpuDriver(targetMount: String, cfwInput: URL) throws {

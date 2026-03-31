@@ -1116,7 +1116,7 @@ main() {
   if [[ "$LESS_MODE" -eq 0 ]]; then
     run_boot_analysis
   else
-    run_make "Start VM" boot
+    run_make "Start VM" boot_less
   fi
 }
 

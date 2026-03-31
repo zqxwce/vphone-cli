@@ -413,6 +413,9 @@ int main(int argc, char *argv[]) {
     // Bootstrap: if running from install path and a cached update exists, exec
     // it
     const char *selfPath = self_executable_path();
+    NSLog(@"vphoned: starting (pid=%d, path=%s)", getpid(), selfPath ?: "?");
+
+#if !LESS
     if (selfPath && strcmp(selfPath, INSTALL_PATH) == 0 &&
         access(CACHE_PATH, X_OK) == 0) {
       NSLog(@"vphoned: found cached binary at %s, exec'ing", CACHE_PATH);
@@ -421,8 +424,7 @@ int main(int argc, char *argv[]) {
             strerror(errno));
       unlink(CACHE_PATH);
     }
-
-    NSLog(@"vphoned: starting (pid=%d, path=%s)", getpid(), selfPath ?: "?");
+#endif
 
     if (!vp_hid_load())
       return 1;

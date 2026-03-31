@@ -13,6 +13,13 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
     /// Synthetic battery source for runtime charge/connectivity updates.
     private var batterySource: AnyObject?
 
+    public enum Variant: String, Sendable {
+        case less
+        case regular
+        case dev
+        case jb
+    }
+    
     struct Options {
         var configURL: URL
         var romURL: URL?
@@ -27,6 +34,7 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
         var screenPPI: Int = 460
         var screenScale: Double = 3.0
         var kernelDebugPort: Int?
+        var variant: Variant
     }
 
     private struct DeviceIdentity {
