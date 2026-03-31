@@ -108,12 +108,14 @@ struct VPhoneBootCLI: ParsableCommand {
 
 struct PatchFirmwareCLI: ParsableCommand {
     enum VariantOption: String, CaseIterable, ExpressibleByArgument {
+        case less
         case regular
         case dev
         case jb
 
         var pipelineVariant: FirmwarePipeline.Variant {
             switch self {
+            case .less: .less
             case .regular: .regular
             case .dev: .dev
             case .jb: .jb

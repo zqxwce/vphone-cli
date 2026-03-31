@@ -58,6 +58,7 @@ NONE_INTERACTIVE_RAW="${NONE_INTERACTIVE:-0}"
 NONE_INTERACTIVE=0
 JB_MODE=0
 DEV_MODE=0
+LESS_MODE=0
 SKIP_PROJECT_SETUP=0
 
 die() {
@@ -736,6 +737,19 @@ run_make() {
   make "$@"
 }
 
+run_make_sudo() {
+  local label="$1"
+  shift
+
+  echo ""
+  echo "=== ${label} ==="
+  if [[ -n "${SUDO_PASSWORD:-}" ]]; then
+    sudo -A -- make "$@"
+  else
+    sudo -- make "$@"
+  fi
+}
+
 start_boot_dfu() {
   mkdir -p "$LOG_DIR"
 
@@ -944,6 +958,9 @@ parse_args() {
       --dev)
         DEV_MODE=1
         ;;
+      --less)
+        LESS_MODE=1
+        ;;
       --skip-project-setup)
         SKIP_PROJECT_SETUP=1
         ;;
@@ -954,6 +971,7 @@ Usage: setup_machine.sh [--jb] [--dev] [--skip-project-setup]
 Options:
   --jb                    Use jailbreak firmware patching + jailbreak CFW install.
   --dev                   Use dev firmware patching + dev CFW install.
+  --less                  Use patchless firmware patching + CFW install.
   --skip-project-setup    Skip setup_tools/build stage.
 
 Environment:
@@ -980,8 +998,8 @@ main() {
   local cfw_install_target="cfw_install"
   local mode_label="base"
 
-  if [[ "$JB_MODE" -eq 1 && "$DEV_MODE" -eq 1 ]]; then
-    die "--jb and --dev are mutually exclusive"
+  if (( JB_MODE + DEV_MODE + LESS_MODE > 1 )); then
+    die "--jb, --dev, and --less are mutually exclusive"
   fi
 
   if [[ "$JB_MODE" -eq 1 ]]; then
@@ -992,6 +1010,10 @@ main() {
     fw_patch_target="fw_patch_dev"
     cfw_install_target="cfw_install_dev"
     mode_label="dev"
+  elif [[ "$LESS_MODE" -eq 1 ]]; then
+    fw_patch_target="fw_patch_less"
+    cfw_install_target=""
+    mode_label="less"
   fi
 
   echo "[*] setup_machine mode: ${mode_label}, project_setup=$([[ "$SKIP_PROJECT_SETUP" -eq 1 ]] && echo "skip" || echo "run"), non_interactive=${NONE_INTERACTIVE}"
@@ -1015,7 +1037,11 @@ main() {
 
   run_make "Firmware prep" vm_new
   run_make "Firmware prep" fw_prepare
-  run_make "Firmware patch" "$fw_patch_target"
+  if [[ "$LESS_MODE" -eq 0 ]]; then
+    run_make "Firmware patch" "$fw_patch_target"
+  else
+    run_make_sudo "Firmware patch" "$fw_patch_target"
+  fi
 
   echo ""
   echo "=== Restore phase ==="
@@ -1026,50 +1052,53 @@ main() {
   run_make "Restore" restore RESTORE_UDID="$DEVICE_UDID" RESTORE_ECID="0x$DEVICE_ECID"
   wait_for_post_restore_reboot
   stop_boot_dfu
-  echo "[*] Waiting ${POST_KILL_SETTLE_DELAY}s for cleanup before ramdisk stage..."
-  sleep "$POST_KILL_SETTLE_DELAY"
 
-  echo ""
-  echo "=== Ramdisk + CFW phase ==="
-  start_boot_dfu
-  load_device_identity
-  wait_for_recovery
-  run_make "Ramdisk" ramdisk_build RAMDISK_UDID="$DEVICE_UDID"
-  echo "[*] Ramdisk identity context: restore_udid=${DEVICE_UDID} ecid=0x${DEVICE_ECID}"
-  run_make "Ramdisk" ramdisk_send IRECOVERY_ECID="0x$DEVICE_ECID" RAMDISK_UDID="$DEVICE_UDID"
-  start_iproxy
+  if [[ "$LESS_MODE" -eq 0 ]]; then
+    echo "[*] Waiting ${POST_KILL_SETTLE_DELAY}s for cleanup before ramdisk stage..."
+    sleep "$POST_KILL_SETTLE_DELAY"
+  
+    echo ""
+    echo "=== Ramdisk + CFW phase ==="
+    start_boot_dfu
+    load_device_identity
+    wait_for_recovery
+    run_make "Ramdisk" ramdisk_build RAMDISK_UDID="$DEVICE_UDID"
+    echo "[*] Ramdisk identity context: restore_udid=${DEVICE_UDID} ecid=0x${DEVICE_ECID}"
+    run_make "Ramdisk" ramdisk_send IRECOVERY_ECID="0x$DEVICE_ECID" RAMDISK_UDID="$DEVICE_UDID"
+    start_iproxy
 
-  wait_for_ramdisk_ssh
+    wait_for_ramdisk_ssh
 
-  run_make "CFW install" "$cfw_install_target" SSH_PORT="$RAMDISK_SSH_PORT"
-  stop_boot_dfu
-  stop_iproxy
+    run_make "CFW install" "$cfw_install_target" SSH_PORT="$RAMDISK_SSH_PORT"
+    stop_boot_dfu
+    stop_iproxy
 
-  echo ""
-  echo "=== First boot ==="
-  if [[ "$NONE_INTERACTIVE" -eq 0 ]]; then
-    read -r "?[*] press Enter to start VM, after the VM has finished booting, press Enter again to finish last stage"
-  else
-    echo "[*] NONE_INTERACTIVE=1: auto-starting first boot"
+    echo ""
+    echo "=== First boot ==="
+    if [[ "$NONE_INTERACTIVE" -eq 0 ]]; then
+      read -r "?[*] press Enter to start VM, after the VM has finished booting, press Enter again to finish last stage"
+    else
+      echo "[*] NONE_INTERACTIVE=1: auto-starting first boot"
+    fi
+
+    start_first_boot
+
+    if [[ "$NONE_INTERACTIVE" -eq 0 ]]; then
+      read -r "?[*] Press Enter once the VM is fully booted"
+    else
+      wait_for_first_boot_prompt_auto
+    fi
+    send_first_boot_commands
+
+    echo "[*] Commands sent. Waiting for VM shutdown..."
+    wait "$BOOT_PID"
+    BOOT_PID=""
+
+    exec {BOOT_FIFO_FD}>&- || true
+    BOOT_FIFO_FD=""
+    rm -f "$BOOT_FIFO" || true
+    BOOT_FIFO=""
   fi
-
-  start_first_boot
-
-  if [[ "$NONE_INTERACTIVE" -eq 0 ]]; then
-    read -r "?[*] Press Enter once the VM is fully booted"
-  else
-    wait_for_first_boot_prompt_auto
-  fi
-  send_first_boot_commands
-
-  echo "[*] Commands sent. Waiting for VM shutdown..."
-  wait "$BOOT_PID"
-  BOOT_PID=""
-
-  exec {BOOT_FIFO_FD}>&- || true
-  BOOT_FIFO_FD=""
-  rm -f "$BOOT_FIFO" || true
-  BOOT_FIFO=""
 
   if [[ "$JB_MODE" -eq 1 ]]; then
     echo ""
@@ -1084,7 +1113,11 @@ main() {
   echo "Setup completed."
 
   echo "=== Boot analysis ==="
-  run_boot_analysis
+  if [[ "$LESS_MODE" -eq 0 ]]; then
+    run_boot_analysis
+  else
+    run_make "Start VM" boot
+  fi
 }
 
 main "$@"
