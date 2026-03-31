@@ -109,8 +109,12 @@ help:
 .PHONY: setup_machine setup_tools
 
 setup_machine:
-	@if [ "$(filter 1 true yes YES TRUE,$(JB))" != "" ] && [ "$(filter 1 true yes YES TRUE,$(DEV))" != "" ]; then \
-		echo "Error: JB=1 and DEV=1 are mutually exclusive"; \
+	@if count=0; \
+	  [ -n "$(filter 1 true yes YES TRUE,$(JB))" ] && count=$$((count+1)); \
+	  [ -n "$(filter 1 true yes YES TRUE,$(DEV))" ] && count=$$((count+1)); \
+	  [ -n "$(filter 1 true yes YES TRUE,$(LESS))" ] && count=$$((count+1)); \
+	  [ $$count -gt 1 ]; then \
+		echo "Error: JB=1, DEV=1, and LESS=1 are mutually exclusive"; \
 		exit 1; \
 	fi
 	SUDO_PASSWORD="$(SUDO_PASSWORD)" \
@@ -118,6 +122,7 @@ setup_machine:
 	zsh $(SCRIPTS)/setup_machine.sh \
 		$(if $(filter 1 true yes YES TRUE,$(JB)),--jb,) \
 		$(if $(filter 1 true yes YES TRUE,$(DEV)),--dev,) \
+		$(if $(filter 1 true yes YES TRUE,$(LESS)),--less,) \
 		$(if $(filter 1 true yes YES TRUE,$(SKIP_PROJECT_SETUP)),--skip-project-setup,)
 
 setup_tools:
@@ -265,13 +270,20 @@ boot_dfu: build boot_binary_check
 # Firmware pipeline
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: fw_prepare fw_patch fw_patch_dev fw_patch_jb
+.PHONY: fw_prepare fw_patch fw_patch_less fw_patch_dev fw_patch_jb
 
 fw_prepare:
 	cd $(VM_DIR) && bash "$(CURDIR)/$(SCRIPTS)/fw_prepare.sh"
 
 fw_patch: patcher_build
 	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant regular
+
+fw_patch_less: patcher_build
+	@sh -c 'if [ "$$(id -u)" -ne 0 ]; then \
+		echo "fw_patch_less must be run via sudo" >&2; \
+		exit 1; \
+	fi; \
+	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant less'
 
 fw_patch_dev: patcher_build
 	"$(CURDIR)/$(PATCHER_BINARY)" patch-firmware --vm-directory "$(CURDIR)/$(VM_DIR)" --variant dev

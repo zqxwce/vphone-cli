@@ -24,6 +24,7 @@ public final class FirmwarePipeline {
     // MARK: - Variant
 
     public enum Variant: String, Sendable {
+        case less
         case regular
         case dev
         case jb
@@ -173,7 +174,7 @@ public final class FirmwarePipeline {
             inRestoreDir: false,
             searchPatterns: ["AVPBooter*.bin"],
             patcherFactories: {
-                if variant != .regular {
+                if variant != .less {
                     return [
                         { data, verbose in
                             AVPBooterPatcher(data: data, verbose: verbose)
@@ -191,9 +192,9 @@ public final class FirmwarePipeline {
             searchPatterns: ["Firmware/dfu/iBSS.vresearch101.RELEASE.im4p"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     []
-                case .dev:
+                case .regular, .dev:
                     [{ data, verbose in
                         IBootPatcher(data: data, mode: .ibss, verbose: verbose)
                     }]
@@ -210,16 +211,16 @@ public final class FirmwarePipeline {
             }()
         ))
 
-        // 3. iBEC — The automatic patching is disabled for the regular variant (you can still just place a custom component there).
+        // 3. iBEC — The automatic patching is disabled for the patchless variant (you can still just place a custom component there).
         components.append(ComponentDescriptor(
             name: "iBEC",
             inRestoreDir: true,
             searchPatterns: ["Firmware/dfu/iBEC.vresearch101.RELEASE.im4p"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     []
-                case .dev, .jb:
+                case .regular, .dev, .jb:
                     [{ data, verbose in
                         IBootPatcher(data: data, mode: .ibec, verbose: verbose)
                     }]
@@ -227,16 +228,16 @@ public final class FirmwarePipeline {
             }()
         ))
 
-        // 4. LLB — The automatic patching is disabled for the regular variant (you can still just place a custom component there).
+        // 4. LLB — The automatic patching is disabled for the patchless variant (you can still just place a custom component there).
         components.append(ComponentDescriptor(
             name: "LLB",
             inRestoreDir: true,
             searchPatterns: ["Firmware/all_flash/LLB.vresearch101.RELEASE.im4p"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     []
-                case .dev, .jb:
+                case .regular, .dev, .jb:
                     [{ data, verbose in
                         IBootPatcher(data: data, mode: .llb, verbose: verbose)
                     }]
@@ -251,8 +252,12 @@ public final class FirmwarePipeline {
             searchPatterns: ["Firmware/txm.iphoneos.research.im4p"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     []
+                case .regular:
+                    [{ data, verbose in
+                        TXMPatcher(data: data, verbose: verbose)
+                    }]
                 case .dev, .jb:
                     [{ data, verbose in
                         TXMDevPatcher(data: data, verbose: verbose)
@@ -268,9 +273,9 @@ public final class FirmwarePipeline {
             searchPatterns: ["kernelcache.research.vphone600"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     []
-                case .dev:
+                case .regular, .dev:
                     [{ data, verbose in
                         KernelPatcher(data: data, verbose: verbose)
                     }]
@@ -304,11 +309,11 @@ public final class FirmwarePipeline {
             searchPatterns: ["BuildManifest.plist"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     [{ data, verbose in
                         CryptexFilesystemPatcher(buildManiest: data, restoreDir: try! self.findRestoreDirectory(), verbose: verbose)
                     }]
-                case .dev, .jb:
+                case .regular, .dev, .jb:
                     []
                 }
             }()
@@ -321,11 +326,11 @@ public final class FirmwarePipeline {
             searchPatterns: ["BuildManifest.plist"],
             patcherFactories: {
                 return switch variant {
-                case .regular:
+                case .less:
                     [{ data, verbose in
                         ManifestHashPatcher(data: data, restoreDir: try? self.findRestoreDirectory(), verbose: verbose)
                     }]
-                case .dev, .jb:
+                case .regular, .dev, .jb:
                     []
                 }
             }()

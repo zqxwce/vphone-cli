@@ -17,11 +17,12 @@ Boot a virtual iPhone (iOS 26) via Apple's Virtualization.framework using PCC re
 
 ## Firmware Variants
 
-Three patch variants are available with increasing levels of security bypass:
+Four patch variants are available with increasing levels of security bypass:
 
 | Variant         | Boot Chain  |    CFW    | Make Targets                       |
 | --------------- | :---------: | :-------: | ---------------------------------- |
-| **Regular**     | 1 patch  | 10 phases | `fw_patch` + `cfw_install`         |
+| **Patchless**   | 2 patches   | 2 phases  | `fw_patch_less` (sudo)         |
+| **Regular**     | 41 patches  | 10 phases | `fw_patch` + `cfw_install`         |
 | **Development** | 52 patches  | 12 phases | `fw_patch_dev` + `cfw_install_dev` |
 | **Jailbreak**   | 112 patches | 14 phases | `fw_patch_jb` + `cfw_install_jb`   |
 
@@ -102,7 +103,8 @@ git clone --recurse-submodules https://github.com/Lakr233/vphone-cli.git
 
 ```bash
 make setup_machine            # full automation through "First Boot" (includes restore/ramdisk/CFW)
-# options: NONE_INTERACTIVE=1 SUDO_PASSWORD=... 
+# options: NONE_INTERACTIVE=1 SUDO_PASSWORD=...
+# LESS=1 for patchless variant (- AMFI, SSV, Img4, TXM bypasses) 
 # DEV=1 for dev variant (+ TXM entitlement/debug bypasses)
 # JB=1 for jailbreak variant (+ full security bypass)
 ```
@@ -116,6 +118,7 @@ make vm_new                   # create VM directory with manifest (config.plist)
 # options: CPU=8 MEMORY=8192 DISK_SIZE=64
 make fw_prepare               # download IPSWs, extract, merge, generate manifest
 make fw_patch                 # patch boot chain (regular variant)
+# or: sudo make fw_patch_less # patchless variant (- AMFI, SSV, Img4, TXM bypasses)
 # or: make fw_patch_dev       # dev variant (+ TXM entitlement/debug bypasses)
 # or: make fw_patch_jb        # jailbreak variant (+ full security bypass)
 ```
