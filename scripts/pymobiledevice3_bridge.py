@@ -198,15 +198,30 @@ async def cmd_restore_get_shsh(
     print(f"[+] SHSH saved: {out_path}")
 
 
-async def cmd_restore_update(vm_dir: Path, ecid: Optional[int], udid: Optional[str], erase: bool) -> None:
+async def cmd_restore_update(
+    vm_dir: Path, ecid: Optional[int], udid: Optional[str], erase: bool, tss: Optional[dict] = None
+) -> None:
     restore_dir = find_restore_dir(vm_dir)
     ipsw = IPSW.create_from_path(str(restore_dir))
     behavior = Behavior.Erase if erase else Behavior.Update
     device = await resolve_device(ecid, udid)
-    await Restore(ipsw, device, behavior=behavior, ignore_fdr=False).update()
+    await Restore(ipsw, device, tss=tss, behavior=behavior, ignore_fdr=False).update()
 
 
-def require_ecid(value: str) -> Optional[int]:
+async def cmd_restore_offline_update(
+    vm_dir: Path, ecid: Optional[int], udid: Optional[str], erase: bool
+) -> None:
+    device = await resolve_device(ecid, udid)
+    shsh_path = derive_shsh_output(vm_dir, device.get_ecid_value())
+    if not shsh_path.exists():
+        raise FileNotFoundError(f"SHSH blob not found: {shsh_path}")
+    print(f"[*] Using SHSH blob: {shsh_path}")
+    with shsh_path.open("rb") as handle:
+        tss_data = plistlib.load(handle)
+    await cmd_restore_update(vm_dir, ecid, udid, erase=erase, tss=tss_data)
+
+
+def require_ecid(value: Optional[str]) -> Optional[int]:
     try:
         return parse_ecid(value)
     except ValueError as exc:
@@ -287,6 +302,22 @@ def restore_update_command(
     erase: bool = typer.Option(True, "--erase/--no-erase", help="Run update-in-place with --no-erase."),
 ) -> Awaitable[None]:
     return cmd_restore_update(vm_dir, require_ecid(ecid), udid, erase=erase)
+
+
+@app.command("restore-offline", help="Restore using a saved .shsh blob (no TSS server contact)")
+def restore_offline_command(
+    vm_dir: Path = typer.Option(
+        Path("."),
+        help="VM directory",
+        exists=False,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    ecid: Optional[str] = typer.Option(None, help="Hex ECID (with/without 0x)"),
+    udid: Optional[str] = typer.Option(None, help="Target USB UDID"),
+    erase: bool = typer.Option(True, "--erase/--no-erase", help="Run update-in-place with --no-erase."),
+) -> Awaitable[None]:
+    return cmd_restore_offline_update(vm_dir, require_ecid(ecid), udid, erase=erase)
 
 
 async def main(argv: list[str]) -> None:

@@ -283,7 +283,7 @@ fw_patch_jb: patcher_build
 # Restore
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: restore_get_shsh restore
+.PHONY: restore_get_shsh restore restore_offline
 
 restore_get_shsh:
 	cd $(VM_DIR) && "$(PYTHON)" "$(PMD3_BRIDGE)" restore-get-shsh \
@@ -293,6 +293,12 @@ restore_get_shsh:
 
 restore:
 	cd $(VM_DIR) && "$(PYTHON)" "$(PMD3_BRIDGE)" restore-update \
+		--vm-dir . \
+		$(if $(RESTORE_UDID),--udid $(RESTORE_UDID),) \
+		$(if $(RESTORE_ECID),--ecid $(RESTORE_ECID),)
+
+restore_offline:
+	cd $(VM_DIR) && "$(PYTHON)" "$(PMD3_BRIDGE)" restore-offline \
 		--vm-dir . \
 		$(if $(RESTORE_UDID),--udid $(RESTORE_UDID),) \
 		$(if $(RESTORE_ECID),--ecid $(RESTORE_ECID),)
