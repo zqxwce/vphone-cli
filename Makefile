@@ -239,8 +239,8 @@ amfidont_allow_vphone: bundle
 boot_host_preflight: build
 	zsh $(SCRIPTS)/boot_host_preflight.sh
 
-boot_binary_check: $(BINARY)
-	@zsh $(SCRIPTS)/boot_host_preflight.sh --assert-bootable
+define BOOT_BINARY_CHECK
+	@zsh $(SCRIPTS)/boot_host_preflight.sh $(1)
 	@tmp_log="$$(mktemp -t vphone-boot-preflight.XXXXXX)"; \
 	set +e; \
 	"$(CURDIR)/$(BINARY)" --help >"$$tmp_log" 2>&1; \
@@ -258,12 +258,19 @@ boot_binary_check: $(BINARY)
 		exit $$rc; \
 	fi; \
 	rm -f "$$tmp_log"
+endef
+
+boot_binary_check_less: $(BINARY)
+	$(call BOOT_BINARY_CHECK,--assert-bootable --less)
+
+boot_binary_check: $(BINARY)
+	$(call BOOT_BINARY_CHECK,--assert-bootable)
 
 boot: bundle vphoned boot_binary_check
 	cd $(VM_DIR) && "$(CURDIR)/$(BUNDLE_BIN)" \
 		--config ./config.plist
 
-boot_less: bundle vphoned boot_binary_check
+boot_less: bundle vphoned boot_binary_check_less
 	cd $(VM_DIR) && "$(CURDIR)/$(BUNDLE_BIN)" \
 		--config ./config.plist --variant less
 

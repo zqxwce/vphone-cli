@@ -6,9 +6,8 @@
 // 2. With the OS, AppOS, and SystemOS images, attach them and copy them to a target image
 // 3. Create trustcache for resulting image
 // 4. Create mtree for resulting image
-// 5. Download apfs_sealvolume
-// 6. Generate digest.db and SystemVolume root_hash
-// 7. Join mtree and digest.db to Ap,SystemVolumeCanonicalMetadata
+// 5. Generate digest.db and SystemVolume root_hash
+// 6. Join mtree and digest.db to Ap,SystemVolumeCanonicalMetadata
 
 import Foundation
 import CryptoKit
@@ -75,8 +74,7 @@ public final class CryptexFilesystemPatcher: Patcher {
         let mtreePath = try createMtree(filesystem: unencryptedImage)
         
         print("Creating DigestDB and Root Hash")
-        let sealvolume = try extractSealvolume()
-        let (digestDbPath, rootHashPath) = try createDigestAndHash(sealvolume: sealvolume, filesystem: unencryptedImage, mtree: mtreePath)
+        let (digestDbPath, rootHashPath) = try createDigestAndHash(filesystem: unencryptedImage, mtree: mtreePath)
         let metadataPath = try compressCanonicalMetadata(mtree: mtreePath, digestDb: digestDbPath)
         let rootHashContainer = try wrapRootHash(rootHashPath)
         
@@ -341,7 +339,7 @@ public final class CryptexFilesystemPatcher: Patcher {
         return im4pPath
     }
     
-    func createDigestAndHash(sealvolume: URL, filesystem: URL, mtree: URL) throws -> (URL, URL) {
+    func createDigestAndHash(filesystem: URL, mtree: URL) throws -> (URL, URL) {
         let (device, mount) = try attachImage(path: filesystem)
         defer { try? detachImage(deviceNode: device) }
 
@@ -368,6 +366,7 @@ public final class CryptexFilesystemPatcher: Patcher {
         FileManager.default.createFile(atPath: mtreeRemapPath.path, contents: remapContent.data(using: .utf8))
 
         try unmount(mount: mount)
+        let sealvolume = self.vphoneCliDirectory.appending(path: ".tools/apfs_sealvolume")
         _ = try runProcess(sealvolume.path, [
             "-R", mtreeRemapPath.path,
             "-U", digestDbPath.path, // Save digest records
@@ -412,35 +411,6 @@ public final class CryptexFilesystemPatcher: Patcher {
         }
 
         throw FirmwareManifest.ManifestError.fileNotFound("metadata")
-    }
-    
-    func extractSealvolume() throws -> URL {
-        // We cannot execute iOS binaries on macOS, therefore, we have to download a macOS ramdisk
-        let tmpDir = try createTmpDir()
-        _ = try runProcess("/opt/homebrew/bin/ipsw", [
-            "download", "appledb", "--os", "macOS", "--build", "25D2140",
-            "--pattern", "094-33864-054.dmg",
-            "--output", tmpDir.path
-        ])
-        let ramdiskIm4pPath = tmpDir.appending(path: "25D2140__MacOS/094-33864-054.dmg")
-        let ramdiskPath = tmpDir.appending(path: "ramdisk.dmg")
-        try extractIm4pContainer(ramdiskIm4pPath, output: ramdiskPath)
-        
-        let (device, mount) = try attachImage(path: ramdiskPath, readonly: true)
-        defer { try? detachImage(deviceNode: device) }
-        
-        let sourcePath = URL.init(filePath: mount).appending(path: "System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_sealvolume")
-        let targetPath = tmpDir.appending(path: "apfs_sealvolume")
-        try FileManager.default.copyItem(at: sourcePath, to: targetPath)
-        return targetPath
-    }
-    
-    func extractIm4pContainer(_ container: URL, output: URL) throws {
-        _ = try runProcess("/opt/homebrew/bin/ipsw", [
-            "img4", "im4p", "extract",
-            "--output", output.path,
-            container.path
-        ])
     }
     
     func createMtree(filesystem: URL) throws -> URL {

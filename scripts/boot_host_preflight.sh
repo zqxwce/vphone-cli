@@ -9,6 +9,7 @@ PROJECT_ROOT="${SCRIPT_DIR:h}"
 
 ASSERT_BOOTABLE=0
 QUIET=0
+LESS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,6 +19,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --quiet)
       QUIET=1
+      shift
+      ;;
+    --less)
+      LESS=1
       shift
       ;;
     *)
@@ -121,6 +126,20 @@ if (( ASSERT_BOOTABLE == 1 )); then
     }
     exit 3
   fi
+fi
+
+if (( LESS == 1 && ASSERT_BOOTABLE == 1 )); then
+  case " $CURRENT_BOOT_ARGS " in
+    *" amfi_get_out_of_my_way=0x1 "*)
+      ;;
+    *)
+      (( QUIET == 0 )) && {
+        echo ""
+        echo "Error: The patchless variant requires a disabled AMFI." >&2
+      }
+      exit 3
+      ;;
+  esac
 fi
 
 print_section "Entitlements"
