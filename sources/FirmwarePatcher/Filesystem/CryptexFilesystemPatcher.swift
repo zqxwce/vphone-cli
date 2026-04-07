@@ -144,6 +144,7 @@ public final class CryptexFilesystemPatcher: Patcher {
             try FileManager.default.removeItem(at: finalDestination)
         }
         try FileManager.default.moveItem(at: finalFile, to: finalDestination)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: finalDestination.path)
         return (newDmgPath, finalDestination)
     }
     
@@ -173,6 +174,7 @@ public final class CryptexFilesystemPatcher: Patcher {
         let vphonedBin = vphonedSrc.appendingPathComponent("vphoned")
 
         try buildVphoned(vphonedSrc: vphonedSrc, vphonedBin: vphonedBin)
+        defer { try? FileManager.default.removeItem(at: vphonedBin) }
         
         // Sign
         let targetBin = target.appending(path: "/usr/bin/vphoned")
@@ -184,12 +186,6 @@ public final class CryptexFilesystemPatcher: Patcher {
             targetBin.path
         ])
         _ = try runProcess("/bin/chmod", ["0755", targetBin.path])
-        
-        let signedCopyPath = self.restoreDir.deletingLastPathComponent().appending(path: ".vphoned.signed")
-        if FileManager.default.fileExists(atPath: signedCopyPath.path) {
-            try FileManager.default.removeItem(at: signedCopyPath)
-        }
-        try FileManager.default.copyItem(at: targetBin, to: signedCopyPath)
         
         // Register Launch Daemon
         let vphonedLaunchdPlist = vphonedSrc.appending(path: "vphoned.plist")
