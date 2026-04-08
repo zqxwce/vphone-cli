@@ -93,27 +93,32 @@ fi
 echo "[4/5] Python venv"
 zsh "$SCRIPT_DIR/setup_venv.sh"
 
-# ── APFS sealvolume ────────────────────────────────────────────────
+# ── APFS sealvolume (patchless variant only) ──────────────────────
 
-echo "[5/5] apfs sealvolume"
-TMP_DIR="$(mktemp -d)"
-ipsw download appledb \
-  --os macOS \
-  --build 25D2140 \
-  --pattern "094-33864-054.dmg" \
-  --output "$TMP_DIR"
+VARIANT="${VARIANT:-}"
 
-RAMDISK_IM4P="$TMP_DIR/25D2140__MacOS/094-33864-054.dmg"
-RAMDISK="$TMP_DIR/ramdisk.dmg"
-ipsw img4 im4p extract --output "$RAMDISK" "$RAMDISK_IM4P"
+if [[ "$VARIANT" == "less" ]]; then
+    echo "[5/5] apfs sealvolume"
+    TMP_DIR="$(mktemp -d)"
+    ipsw download appledb \
+      --os macOS \
+      --build 25D2140 \
+      --pattern "094-33864-054.dmg" \
+      --output "$TMP_DIR"
 
-DEVICE=$(hdiutil attach -readonly -nobrowse "$RAMDISK" | awk '/Apple_APFS/ {print $1; exit}')
-MOUNT=$(mount | grep "$DEVICE" | awk '{print $3}')
-cp "$MOUNT/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_sealvolume" \
-   "$TOOLS_PREFIX/apfs_sealvolume"
-hdiutil detach "$DEVICE" >/dev/null 2>&1 || true
-echo "Downloaded: $TOOLS_PREFIX/apfs_sealvolume"
+    RAMDISK_IM4P="$TMP_DIR/25D2140__MacOS/094-33864-054.dmg"
+    RAMDISK="$TMP_DIR/ramdisk.dmg"
+    ipsw img4 im4p extract --output "$RAMDISK" "$RAMDISK_IM4P"
 
+    DEVICE=$(hdiutil attach -readonly -nobrowse "$RAMDISK" | awk '/Apple_APFS/ {print $1; exit}')
+    MOUNT=$(mount | grep "$DEVICE" | awk '{print $3}')
+    cp "$MOUNT/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_sealvolume" \
+       "$TOOLS_PREFIX/apfs_sealvolume"
+    hdiutil detach "$DEVICE" >/dev/null 2>&1 || true
+    echo "Downloaded: $TOOLS_PREFIX/apfs_sealvolume"
+else
+    echo "[5/5] apfs sealvolume (skipped — patchless variant only)"
+fi
 
 echo ""
 echo "All tools installed."
