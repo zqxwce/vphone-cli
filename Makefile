@@ -128,7 +128,7 @@ setup_machine:
 		$(if $(filter 1 true yes YES TRUE,$(SKIP_PROJECT_SETUP)),--skip-project-setup,)
 
 setup_tools:
-	zsh $(SCRIPTS)/setup_tools.sh
+	VARIANT=$(VARIANT) zsh $(SCRIPTS)/setup_tools.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # Clean — remove all untracked/ignored files (preserves IPSWs only)
