@@ -1,3 +1,3 @@
 kernel_name	json_path	matched	missed	printf('%.4f%%', percent)	total	json_sha256
-kernelcache.release.vphone600	/Users/qaq/Documents/GitHub/vphone-cli/research/kernel_info/json/kernelcache.release.vphone600.bin.symbols.json	4327	1398	75.5808%	5725	9dba4eb578da1403dcb17b57ed82f3df469a4315c089d85cd8a583df228686c2
-kernelcache.research.vphone600	/Users/qaq/Documents/GitHub/vphone-cli/research/kernel_info/json/kernelcache.research.vphone600.bin.symbols.json	4327	1398	75.5808%	5725	7232730d5d88dc816b1e7b46505ac61b28bb9647a41cc0806538c7e800d23942
+kernelcache.release.vphone600	research/kernel_info/json/kernelcache.release.vphone600.bin.symbols.json	4327	1398	75.5808%	5725	03426d6f6ca219777a9b8c66a3a12e000b2fe175b92ede318b2286ad180d8fe9
+kernelcache.research.vphone600	research/kernel_info/json/kernelcache.research.vphone600.bin.symbols.json	4327	1398	75.5808%	5725	b6e710db56126b101964089ccfaa204247cec5460a66b567e2102709c76b38e8
