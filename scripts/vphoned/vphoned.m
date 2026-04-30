@@ -15,7 +15,11 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #import <Foundation/Foundation.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <mach-o/dyld.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -92,6 +96,44 @@ static const char *self_executable_path(void) {
   if (_NSGetExecutablePath(path, &size) != 0)
     return NULL;
   return path;
+}
+
+// MARK: - Network
+
+/// Returns the first non-loopback IPv4 address, preferring en* interfaces
+/// (Wi-Fi/cellular over virtual). Returns nil if no usable address is found.
+static NSString *primary_ipv4_address(void) {
+  struct ifaddrs *ifap = NULL;
+  if (getifaddrs(&ifap) != 0 || ifap == NULL)
+    return nil;
+
+  NSString *preferred = nil;
+  NSString *fallback = nil;
+
+  for (struct ifaddrs *cur = ifap; cur != NULL; cur = cur->ifa_next) {
+    if (cur->ifa_addr == NULL || cur->ifa_addr->sa_family != AF_INET)
+      continue;
+    if ((cur->ifa_flags & IFF_UP) == 0 ||
+        (cur->ifa_flags & IFF_LOOPBACK) != 0)
+      continue;
+
+    char buf[INET_ADDRSTRLEN] = {0};
+    struct sockaddr_in *sin = (struct sockaddr_in *)cur->ifa_addr;
+    if (!inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf)))
+      continue;
+
+    NSString *addr = [NSString stringWithUTF8String:buf];
+    NSString *name = [NSString stringWithUTF8String:cur->ifa_name];
+    if ([name hasPrefix:@"en"] || [name hasPrefix:@"pdp_ip"]) {
+      preferred = addr;
+      break;
+    }
+    if (!fallback)
+      fallback = addr;
+  }
+
+  freeifaddrs(ifap);
+  return preferred ?: fallback;
 }
 
 // MARK: - Auto-update
@@ -295,6 +337,9 @@ static BOOL handle_client(int fd) {
       @"name" : @"vphoned",
       @"caps" : caps,
     } mutableCopy];
+    NSString *ip = primary_ipv4_address();
+    if (ip)
+      helloResp[@"ip"] = ip;
     if (needUpdate)
       helloResp[@"need_update"] = @YES;
 

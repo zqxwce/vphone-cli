@@ -9,6 +9,7 @@ class VPhoneWindowController: NSObject, NSToolbarDelegate {
     private weak var control: VPhoneControl?
     private weak var virtualMachineView: VPhoneVirtualMachineView?
     private(set) var touchIDMonitor: VPhoneTouchIDMonitor?
+    private var ecid: String?
 
     private nonisolated static let homeItemID = NSToolbarItem.Identifier("home")
 
@@ -21,6 +22,7 @@ class VPhoneWindowController: NSObject, NSToolbarDelegate {
         keyHelper: VPhoneKeyHelper, control: VPhoneControl, ecid: String?
     ) {
         self.control = control
+        self.ecid = ecid
 
         let view = VPhoneVirtualMachineView()
         view.virtualMachine = vm
@@ -45,7 +47,7 @@ class VPhoneWindowController: NSObject, NSToolbarDelegate {
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = windowSize
         window.title = "VPHONE [loading]"
-        window.subtitle = ecid ?? ""
+        window.subtitle = makeSubtitle(ip: nil)
         window.contentView = vmView
         if let ecid {
             if !window.setFrameAutosaveName("vphone-\(ecid)") {
@@ -81,7 +83,17 @@ class VPhoneWindowController: NSObject, NSToolbarDelegate {
             Task { @MainActor in
                 guard let self, let window, let control = self.control else { return }
                 window.title = control.isConnected ? "VPHONE [connected]" : "VPHONE [disconnected]"
+                window.subtitle = self.makeSubtitle(ip: control.isConnected ? control.guestIP : nil)
             }
+        }
+    }
+
+    private func makeSubtitle(ip: String?) -> String {
+        switch (ecid, ip) {
+        case let (ecid?, ip?): "\(ecid) — \(ip)"
+        case let (ecid?, nil): ecid
+        case let (nil, ip?): ip
+        case (nil, nil): ""
         }
     }
 

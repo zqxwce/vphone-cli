@@ -27,6 +27,7 @@ class VPhoneControl {
     private(set) var isConnected = false
     private(set) var guestName = ""
     private(set) var guestCaps: [String] = []
+    private(set) var guestIP: String?
     /// Path to the signed vphoned binary. When set, enables auto-update.
     var guestBinaryURL: URL?
 
@@ -199,6 +200,7 @@ class VPhoneControl {
             let type = resp["t"] as? String ?? ""
             let name = resp["name"] as? String ?? "unknown"
             let caps = resp["caps"] as? [String] ?? []
+            let ip = resp["ip"] as? String
             let needUpdate = resp["need_update"] as? Bool ?? false
 
             Task { @MainActor in
@@ -213,8 +215,10 @@ class VPhoneControl {
                 }
                 self.guestName = name
                 self.guestCaps = caps
+                self.guestIP = ip
                 self.isConnected = true
-                print("[control] connected to \(name) v\(version), caps: \(caps)")
+                let ipSuffix = ip.map { " (\($0))" } ?? ""
+                print("[control] connected to \(name) v\(version)\(ipSuffix), caps: \(caps)")
 
                 if needUpdate && self.variant != .less {
                     self.pushUpdate(fd: fd)
@@ -728,6 +732,7 @@ class VPhoneControl {
         isConnected = false
         guestName = ""
         guestCaps = []
+        guestIP = nil
 
         // Fail all pending requests
         failAllPending()
