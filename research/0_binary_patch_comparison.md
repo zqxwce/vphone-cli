@@ -327,6 +327,71 @@ sandboxed callers that hit the renamed OID match the (rewritten)
 rule as intended. Covered occurrence verified on
 iPhone17,3 / iOS 26.1 / 23B85 at file offset `0xa6618b`.
 
+### `watchdogd` surgical hv_vmm_present cache patch (JB only)
+
+**Why a dedicated patch.** After the kernel-side OID rename
+(`KernelJBPatchHvVmmRename`), `sysctlbyname("kern.hv_vmm_present", ...)`
+returns `ENOENT` on this image. `/usr/libexec/watchdogd` caches that
+answer at startup. On `ENOENT` the cached byte stays at its BSS-zero
+default (`0`) and the downstream `cbz w0, ...` at the IOWatchdog-lookup
+site (`+0x58e0`) takes a branch into a `_os_crash` wrapper that does
+`brk #1`. launchd's `_PanicOnCrash → PanicOnConsecutiveCrash = true`
+flag in `com.apple.watchdogd.plist` escalates the SIGTRAP to a kernel
+panic. The cstring-mangle approach used elsewhere doesn't apply here
+because we want this binary to behave as if the sysctl returned `1`,
+not as if it returned `ENOENT`.
+
+**Patch shape.** Two-instruction surgical edit at every site in
+watchdogd that has the canonical caching shape:
+
+```
+adrp x0, <page>
+add  x0, x0, #<off>          ; "kern.hv_vmm_present"
+...arg setup...
+bl   _sysctlbyname
+cbnz w0, <skip>              ; <-- patched: NOP
+ldur w8, [x29, #-4]
+cmp  w8, #0
+cset wN, ne                  ; <-- patched: mov wN, #1
+adrp xM, <page>
+strb wN, [xM, #<imm>]        ; cached "am I a VM?" byte
+```
+
+Net effect: the cached byte is forced to `1` regardless of the sysctl
+result, and watchdogd's pre-existing "detected virtual machine
+environment, exiting..." clean-exit branch runs instead of the trap
+path. Two functions in watchdogd match this shape on
+`iPhone17,3 / iOS 26.1`; both are patched.
+
+**Code signing.** The byte edit invalidates the SHA-256 slot hashes
+for the 4 KiB pages containing the modifications in watchdogd's own
+`CS_CodeDirectory`. The patcher recomputes those slot hashes in place
+via `cfw_macho_codesign.reattest_modified_offsets` (4 KiB page size
+read from the CD, correct tail-slot length, all present CDs). The
+resulting CD mutation also changes the cdHash, but the existing JB
+kernel patch `patch_amfi_cdhash_in_trustcache` accepts any cdHash, so
+AMFI's trust-cache check still passes at execve. The patcher does NOT
+re-sign with `ldid` — preserving the original Apple-issued code-signing
+identifier (`com.apple.watchdogd`) is required for launchd's boot-task
+identity validation; an earlier attempt to re-sign other rootfs
+binaries with `ldid_sign` tripped this check on `mobile_obliterator`.
+
+**Wiring.**
+
+* `scripts/patchers/cfw_macho_codesign.py` — standalone-Mach-O
+  page-hash re-attestation (parallel to `cfw_dsc_codesign.py` but
+  parses `LC_CODE_SIGNATURE` directly, uses page size from the CD
+  header, handles short tail slot, updates every present CD).
+* `scripts/patchers/cfw_patch_watchdogd.py` — capstone-anchored
+  pattern matcher + Keystone-assembled 2-insn patch + slot reattest.
+  Idempotent.
+* `scripts/patchers/cfw.py patch-watchdogd <binary>` — CLI subcommand.
+* `scripts/patch_hv_vmm_userland.sh watchdogd <binary>` — thin shim
+  used by the install script.
+* `scripts/cfw_install_jb.sh` — invokes the patcher at step `[JB-3.5]`
+  on the live `/mnt1/usr/libexec/watchdogd` (scp-down, patch, scp-up,
+  chmod 0755).
+
 ### CFW Installer Flow Matrix (Script-Level)
 
 | Flow Item                                     | Regular (`cfw_install.sh`)      | Dev (`cfw_install_dev.sh`) | JB (`cfw_install_jb.sh`)                      |

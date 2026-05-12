@@ -34,6 +34,15 @@ Commands:
         the mounted SystemOS Cryptex). Targets a fixed list of identity,
         store, and consumer-service dylibs; skips compute/accel libs.
 
+    patch-watchdogd <binary> [--dry-run]
+        Surgical 2-instruction patch of /usr/libexec/watchdogd's
+        sysctlbyname("kern.hv_vmm_present", ...) caching block so the
+        cached "am I a VM?" byte is forced to 1 regardless of the
+        sysctl result. Necessary because the kernel-side OID rename
+        makes that sysctl return ENOENT, which would otherwise drive
+        watchdogd into a trap path that launchd's _PanicOnCrash
+        escalates to a kernel panic. Also recomputes the affected
+        CodeDirectory slot hash via cfw_macho_codesign.
 
     list-hv-vmm-rootfs-paths
         Print the list of rootfs binary paths that should be byte-5
@@ -68,6 +77,7 @@ if __name__ == "__main__":
     from patchers.cfw_patch_hv_vmm import patch_hv_vmm
     from patchers.cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
     from patchers.cfw_patch_hv_vmm_rootfs import get_patch_paths as get_hv_vmm_rootfs_paths
+    from patchers.cfw_patch_watchdogd import patch_watchdogd
     from patchers.cfw_daemons import parse_cryptex_paths, inject_daemons
 else:
     from .cfw_patch_seputil import patch_seputil
@@ -77,6 +87,7 @@ else:
     from .cfw_patch_hv_vmm import patch_hv_vmm
     from .cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
     from .cfw_patch_hv_vmm_rootfs import get_patch_paths as get_hv_vmm_rootfs_paths
+    from .cfw_patch_watchdogd import patch_watchdogd
     from .cfw_daemons import parse_cryptex_paths, inject_daemons
 
 
@@ -141,6 +152,20 @@ def main():
         results = patch_hv_vmm_in_dsc(sys.argv[2], dry_run=dry_run)
         sys.exit(0)
 
+    elif cmd == "patch-watchdogd":
+        if len(sys.argv) < 3:
+            print("Usage: patch_cfw.py patch-watchdogd <binary> [--dry-run]")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv[3:]
+        try:
+            n = patch_watchdogd(sys.argv[2], dry_run=dry_run)
+        except ValueError as e:
+            print(f"[-] {e}")
+            sys.exit(1)
+        # Exit 0 on both "patched N>0" and "already patched (N==0)".
+        # The install script treats both as success; only a raised
+        # exception (unparseable binary / no anchor) is fatal.
+        sys.exit(0)
 
     elif cmd == "list-hv-vmm-rootfs-paths":
         # Print one path per line for shell consumption (the JB-3.5 /
@@ -181,7 +206,7 @@ def main():
         print("Commands: cryptex-paths, patch-seputil, patch-launchd-cache-loader,")
         print("          patch-mobileactivationd, patch-launchd-jetsam,")
         print("          patch-hv-vmm, patch-hv-vmm-dsc, list-hv-vmm-rootfs-paths,")
-        print("          inject-daemons, inject-dylib")
+        print("          patch-watchdogd, inject-daemons, inject-dylib")
         sys.exit(1)
 
 
