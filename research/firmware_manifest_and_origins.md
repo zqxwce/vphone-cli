@@ -318,3 +318,97 @@ The firmware is a PCC shell wrapping an iPhone core. The vresearch101 boot chain
 handles DFU/TSS signing. The vphone600 device tree + SEP + kernel provide the
 runtime environment. The iPhone userland is patched post-install for activation
 bypass, jailbreak tools, and persistent SSH/VNC.
+
+---
+
+## 9. DeviceTree identity rewrite
+
+The vphone600ap DT carries 13 properties whose values contain the literals
+`vphone600` / `VPHONE600` / `iPhone99,11` / `vmapple` / `vresearch`. Most are
+load-bearing (kernel kext-matching, restore-time identity, IORegistry path
+structure) and cannot be rewritten without breaking boot or restore.
+`DeviceTreePatcher` rewrites the 8 that are either userland-facing identity
+fields or SoC-generation descriptors with non-binding semantics.
+
+| #  | Path                                                 | Property             | Original                                                  | Patched                                                  | Slot | Risk          |
+|----|------------------------------------------------------|----------------------|-----------------------------------------------------------|----------------------------------------------------------|------|---------------|
+| 2  | `device-tree`                                        | `target-sub-type`    | `"VPHONE600AP"`                                           | `"D47AP"`                                                | 12   | HIGHER        |
+| 3  | `device-tree`                                        | `compatible[1]`      | secondary `"iPhone99,11"` (multi-string)                  | `"iPhone17,3"` (multi-string, primary `"VPHONE600AP"` preserved) | 48 | LOW |
+| 10 | `device-tree/product`                                | `fdr-product-type`   | `"iPhone99,11"`                                           | `"iPhone17,3"`                                           | 12   | HIGHER        |
+| 11 | `device-tree/product`                                | `sub-product-type`   | `"iPhone99,11"`                                           | `"iPhone17,3"`                                           | 12   | LOW           |
+| 12 | `device-tree/product`                                | `unique-model`       | `"VPHONE600AP"`                                           | `"D47AP"`                                                | 12   | LOW           |
+| 6  | `device-tree/arm-io`                                 | `device_type`        | `"vresearch1-io"`                                         | `"t8140-io"` (matches d47ap)                             | 14   | MEDIUM        |
+| 7  | `device-tree/arm-io`                                 | `soc-generation`     | `"VResearch1"`                                            | `"H17"` (matches d47ap)                                  | 11   | MEDIUM-LOW    |
+| 13 | `device-tree/product/vphone600-gestalt-variants`     | `name` (node name)   | `"vphone600-gestalt-variants"`                            | `"d47-gestalt-variants"`                                 | 27   | LOW-MEDIUM    |
+
+**Properties intentionally left at vphone600 values** (with the empirical
+reason for each):
+
+- `device-tree.target-type` (`"VPHONE600"`) — Tier 2 attempt broke restore;
+  iBoot / restored_external read this and reject the device when the value
+  doesn't match the BuildManifest's signed identity.
+- `device-tree.model` (`"iPhone99,11"`) — Tier 1 attempt broke restore;
+  same reason as `target-type`.
+- `device-tree.compatible[0]` (`"VPHONE600AP"`) — IOKit's platform-expert
+  matching at boot binds against the FIRST entry of `compatible`. Rewriting
+  it to `D47AP` forces `_PE_init_platform_expert` to look for a D47AP-claiming
+  kext, which doesn't exist in our kernelcache. Panic guaranteed.
+- `device-tree/arm-io.compatible` / `device_type` / `soc-generation`
+  (vmapple1 / vresearch1-io / VResearch1) — bind the vmapple1 IO controller
+  kext, GIC, and PCIe drivers. Rename → no kext claims the SoC IO → boot
+  panic.
+- `device-tree/arm-io/gic.compatible`, `device-tree/arm-io/pcie.compatible` —
+  same family as arm-io entries.
+- `device-tree/product/vphone600-gestalt-variants` (node name) — referenced
+  by libMobileGestalt-equivalent code that looks up the subtree by literal
+  node name. Rename breaks the lookup.
+
+**Compatible multi-string surgical rewrite** (#3). The original blob is:
+
+```
+[0..10]  "VPHONE600AP"       (11 bytes)
+[11]     NUL
+[12..22] "iPhone99,11"       (11 bytes)
+[23]     NUL
+[24..46] "AppleVirtualPlatformARM" (23 bytes)
+[47]     NUL
+```
+
+Patched (slot length preserved at 48):
+
+```
+[0..10]  "VPHONE600AP"        ← unchanged: platform-expert bind site
+[11]     NUL
+[12..21] "iPhone17,3"
+[22]     NUL
+[23..45] "AppleVirtualPlatformARM"
+[46]     NUL
+[47]     NUL (pad)
+```
+
+`AppleVirtualPlatformARM` shifts 1 byte earlier but every consumer walks
+the blob by NUL-terminators, none depend on a fixed byte offset within
+the property. IOKit's platform-expert match against `VPHONE600AP` (first
+entry) is unaffected; the second entry, which userland walks of the
+compatible[] list see when enumerating identifiers, now reports
+`iPhone17,3`.
+
+**Risk classification.**
+
+- **LOW** (#3, #11, #12) — read only by userland identity APIs
+  (libMobileGestalt, IORegistry queries, App Store device class).
+  No iBoot / restored_external / TSS dependency.
+- **HIGHER** (#2, #10) — `target-sub-type` is in the same restore-signed
+  family as `target-type` (already proven to break restore);
+  `fdr-product-type` is read by Factory-Data-Restore code paths that may
+  check it against the BuildManifest. If restore fails after a build that
+  enables these, remove them first and try the remaining LOW-risk three
+  in isolation.
+
+Wiring: all 5 patches are declared in
+`sources/FirmwarePatcher/DeviceTree/DeviceTreePatcher.swift` under
+`propertyPatches`. The serializer rebuilds the entire tree on every run,
+so each new value is written at the same slot length as the original.
+The `compatible` patch uses a new `PropertyValue.bytes(Data)` case that
+takes a pre-built byte blob (necessary because the multi-string layout
+contains embedded NULs).
