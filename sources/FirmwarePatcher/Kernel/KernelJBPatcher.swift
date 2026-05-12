@@ -4,10 +4,10 @@
 
 import Foundation
 
-/// JB kernel patcher: 84 patches across 3 groups.
+/// JB kernel patcher: kernel-side JB patches across 3 groups.
 ///
-/// Group A: Core gate-bypass methods (5 patches)
-/// Group B: Pattern/string anchored methods (16 patches)
+/// Group A: Core gate-bypass methods (4 patches)
+/// Group B: Pattern/string anchored methods (17 patches)
 /// Group C: Shellcode/trampoline heavy methods (4 patches)
 public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
     public let component = "kernelcache_jb"
@@ -42,6 +42,7 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         patchThidShouldCrash()
         patchVmFaultEnterPrepare()
         patchVmMapProtect()
+        patchHvVmmRename()
 
         // Group C
         patchCredLabelUpdateExecve()
