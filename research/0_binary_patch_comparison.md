@@ -102,6 +102,7 @@
 | JB-23 | B     | `patch_thid_should_crash`             | `_thid_should_crash`                                                                                 | Prevent GUARD_TYPE_MACH_PORT crash                                                                                                                                                   |     Y      |
 | JB-24 | B     | `patch_vm_fault_enter_prepare`        | `_vm_fault_enter_prepare`                                                                            | Force `cs_bypass` fast path in runtime fault validation                                                                                                                              |     Y      |
 | JB-25 | B     | `patch_vm_map_protect`                | `_vm_map_protect`                                                                                    | Skip upstream write-downgrade gate in `vm_map_protect`                                                                                                                               |     Y      |
+| JB-26 | B     | `patch_hv_vmm_rename`                 | sysctl OID name cstring `"hv_vmm_present"` → `"Xv_vmm_present"`                                       | Rename the `kern.hv_vmm_present` OID's name string in place (single byte at offset 0 of the 14-byte cstring, `'h' → 'X'`). After this: `sysctlbyname("kern.hv_vmm_present")` returns ENOENT; `sysctlbyname("kern.Xv_vmm_present")` returns the original int value (1). Companion to the user-mode blacklist-flip mangle in `cfw_patch_hv_vmm_dsc.py` — patched dylibs query the new name (truthful 1, for graphics + accel passthrough), blacklisted dylibs query the original (ENOENT → cache 0, for sign-in / device-likeness consumers). |     Y      |
 
 ## CFW Installation Patches
 
@@ -115,6 +116,8 @@
 | 4   | Plist injection           | `launchd.plist`        | bash/dropbear/trollvnc/vphoned daemons                        |    Y    |  Y  |  Y  |
 | 5   | `b` (skip jetsam guard)   | `launchd`              | Prevent jetsam panic on boot                                  |    -    |  Y  |  Y  |
 | 6   | `LC_LOAD_DYLIB` injection | `launchd`              | Load short alias `/b` (copy of `launchdhook.dylib`) at launch |    -    |  -  |  Y  |
+| 7   | cstring byte 5 mangle `'h' → 'X'` (`"kern.hv_vmm_present"` → `"kern.Xv_vmm_present"`) + per-page slot-hash re-attestation, BLACKLIST semantics | DSC dylibs        | Companion to JB kernel rename (Group B `patchHvVmmRename`). The mangle is applied to every DSC dylib EXCEPT those in `DONT_PATCH_INSTALL_NAMES` (sign-in / device-likeness consumers, ~15 entries). Patched dylibs query `kern.Xv_vmm_present` and get the truthful 1 (graphics / accel passthrough). Blacklisted dylibs keep the original cstring, hit ENOENT on the renamed kernel, cache 0, lie about VM presence. On `codeSigningMonitor == 2` hardware the byte-mangle alone causes `CODESIGNING/Invalid Page` SIGKILL because TXM enforces per-page hashes; the re-attestation pass recomputes the SHA-256 slot in the chunk's `CS_CodeDirectory` for every modified 16 KiB page. See `scripts/patchers/cfw_dsc_codesign.py` and `cfw_patch_hv_vmm_dsc.py`. |    -    |  Y  |  Y  |
+| 8   | (removed — was: standalone-binary mangle in 6 rootfs Mach-Os via SSH) | n/a               | Removed in the blacklist-flip redesign. With the kernel rename in place, the 6 rootfs binaries (MobileActivationMigrator, CheckerBoard, StoreKitUISceneService, storekitd, appstored, CorePrescriptionService) get the desired "cache 0 / not in a VM" behavior for free: they keep their original cstring, hit ENOENT on the renamed kernel sysctl, defensive `cbnz w0, skip` leaves the cached byte at BSS-zero. No SSH-time standalone patch needed. |    -    |  -  |  -  |
 
 ### Installed Components
 
@@ -129,6 +132,200 @@
 | 7   | Procursus bootstrap        | Bootstrap filesystem + optional Sileo deb                                                                          |    -    |  -  |  Y  |
 | 8   | BaseBin hooks              | `systemhook.dylib` / `launchdhook.dylib` / `libellekit.dylib` -> `/cores/` plus `/b` alias for `launchdhook.dylib` |    -    |  -  |  Y  |
 | 9   | `TweakLoader.dylib`        | Lean user-tweak loader built from source and installed to `/var/jb/usr/lib/TweakLoader.dylib`                      |    -    |  -  |  Y  |
+
+### `kern.hv_vmm_present` user-mode patcher (Dev + JB only)
+
+Forces every confirmed CANONICAL caller of
+`sysctlbyname("kern.hv_vmm_present", ...)` in user space to read the
+OID as `0` ("not running on a VM"), without changing the kernel-side
+OID (which would also break the display path) and without disabling
+compute/accel libraries' VM fast-paths (which exist precisely so they
+don't try to touch real silicon ANE/AGX). Source-of-truth research:
+`research/hv_vmm_present_usermode_xrefs.md`.
+
+**Patch shape (every site)** — cstring mangle:
+
+```
+Before (cstring section bytes, 20 bytes total):
+    "kern.hv_vmm_present\0"
+    6B 65 72 6E 2E 68 76 5F 76 6D 6D 5F 70 72 65 73 65 6E 74 00
+
+After (1 byte change at offset 0):
+    "Xern.hv_vmm_present\0"
+    58 65 72 6E 2E 68 76 5F 76 6D 6D 5F 70 72 65 73 65 6E 74 00
+    ^^
+```
+
+The kernel's name-to-MIB translation fails with `ENOENT` when the
+caller asks for `"Xern.hv_vmm_present"`, so `sysctlbyname` returns
+-1. The canonical post-call check (`cbnz w0, skip` or
+`cmp w0,#0 ; b.ne skip`) then takes the skip-cache path; the cached
+"is_vmm" byte stays at its initial value (BSS-zero = 0).
+
+We don't modify executable code at all — only one byte of read-only
+string data. The kernel call still happens (with the wrong name), so
+any sysctl-tracing infrastructure can still see activity.
+
+Idempotent: a re-scan for the literal `"kern.hv_vmm_present\0"` finds
+no occurrences in already-mangled dylibs, so the patcher does no work
+on a re-run.
+
+**DSC-side patches** — driven by an explicit whitelist
+(`PATCH_INSTALL_NAMES` in `scripts/patchers/cfw_patch_hv_vmm_dsc.py`)
+applied to chunks under
+`SystemOS/System/Library/Caches/com.apple.dyld/`. Comment a line in
+the whitelist to skip that dylib on the next install — useful for
+bisecting which consumer is responsible for an observable change.
+
+| Dylib                                                     | Component role (paraphrased)                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------- |
+| `usr/lib/libMobileGestalt.dylib`                          | Backs `MGCopyAnswer("hv-vmm-present")` — highest fan-in       |
+| `PrivateFrameworks/AAAFoundation.framework/AAAFoundation` | Apple ID anti-abuse plumbing                                  |
+| `PrivateFrameworks/AuthKit.framework/AuthKit`             | Sign-in-with-Apple-ID / iCloud auth                           |
+| `PrivateFrameworks/IDSFoundation.framework/IDSFoundation` | Apple Identity Service core (iMessage / FaceTime backbone)    |
+| `PrivateFrameworks/DeviceIdentity.framework/DeviceIdentity` | Device-binding / device class identity                     |
+| `PrivateFrameworks/DeviceCheckInternal.framework/...`     | DeviceCheck attestation                                       |
+| `PrivateFrameworks/MobileActivation.framework/...`        | Activation flow                                               |
+| `PrivateFrameworks/ApplePushService.framework/...`        | APNS client (claims device characteristics on connect)        |
+| `PrivateFrameworks/AppStoreUtilities.framework/...`       | Store / IAP support                                           |
+| `PrivateFrameworks/CorePrescription.framework/...`        | Health prescription store sync gate                           |
+| `PrivateFrameworks/CoreCDP.framework/CoreCDP`             | CDP (cloud key-vault / iCloud Drive plumbing)                 |
+| `PrivateFrameworks/EmailFoundation.framework/...`         | Mail account heuristics                                       |
+| `PrivateFrameworks/PhotoFoundation.framework/...`         | Photos asset visibility heuristics                            |
+| `PrivateFrameworks/FindMyBase.framework/FindMyBase`       | Find My anti-spoof                                            |
+| `PrivateFrameworks/AirPlaySupport.framework/...`          | AirPlay receiver gate                                         |
+| `PrivateFrameworks/TrialServer.framework/TrialServer`     | A/B / trial-rollout exclude-VM gate                           |
+| `PrivateFrameworks/VisionKitCore.framework/VisionKitCore` | VisionKit                                                     |
+| `PrivateFrameworks/DVTInstrumentsUtilities.framework/...` | Xcode Instruments support                                     |
+| `PrivateFrameworks/WatchdogServiceManagement.framework/...` | Watchdog manager                                            |
+| `Frameworks/CoreVideo.framework/CoreVideo`                | CoreVideo pipeline                                            |
+
+**Standalone-binary patches (6 files, applied to the device rootfs
+over SSH)**
+
+| Path                                                                                              | Role                                                          |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `/System/Library/DataClassMigrators/MobileActivationMigrator.migrator/MobileActivationMigrator`   | Activation migration helper                                   |
+| `/Applications/CheckerBoard.app/CheckerBoard`                                                     | Apple internal accessibility test app                         |
+| `/Applications/StoreKitUISceneService.app/StoreKitUISceneService`                                 | StoreKit UI host                                              |
+| `/System/Library/Frameworks/StoreKit.framework/Support/storekitd`                                 | StoreKit / IAP daemon                                         |
+| `/System/Library/PrivateFrameworks/AppStoreDaemon.framework/Support/appstored`                    | App Store daemon                                              |
+| `/System/Library/PrivateFrameworks/CorePrescription.framework/XPCServices/CorePrescriptionService.xpc/CorePrescriptionService` | CorePrescription XPC service       |
+
+**Explicitly NOT patched (compute / accel — patching here turns off
+VM fast-paths that exist so the lib doesn't try to touch real silicon
+ANE / AGX / hardware codecs):**
+
+```
+System/Library/Frameworks/CoreML.framework/CoreML
+System/Library/PrivateFrameworks/Espresso.framework/Espresso
+System/Library/PrivateFrameworks/AppleNeuralEngine.framework/AppleNeuralEngine
+System/Library/PrivateFrameworks/CoreRE.framework/CoreRE
+System/Library/PrivateFrameworks/RenderBox.framework/RenderBox
+System/Library/PrivateFrameworks/WebGPU.framework/WebGPU
+System/Library/PrivateFrameworks/caulk.framework/caulk
+System/Library/PrivateFrameworks/IOSurfaceAccelerator.framework/IOSurfaceAccelerator
+System/Library/ExtensionKit/Extensions/HostInferenceProviderService.appex/HostInferenceProviderService
+```
+
+**Wiring**
+
+* `scripts/patchers/cfw_patch_hv_vmm.py` — standalone cstring patcher
+  (used for the on-device files): finds the `"kern.hv_vmm_present\0"`
+  cstring in the Mach-O's __cstring section and rewrites its first
+  byte (`'k'` → `'X'`).
+* `scripts/patchers/cfw_dsc_chunks.py` — chunked-DSC byte-level helper
+  (`DSCChunks(chunks_dir)`): vmaddr↔chunk-fileoff mapping, cstring
+  scan over executable mappings, byte read/write at a vmaddr, and
+  Mach-O header walk-back to resolve a vmaddr to the dylib install
+  name (LC_ID_DYLIB).
+* `scripts/patchers/cfw_patch_hv_vmm_dsc.py` — DSC-native orchestrator.
+  No external `ipsw` dependency. For every `"kern.hv_vmm_present\0"`
+  occurrence in any executable mapping, walks back to the containing
+  dylib's Mach-O header, reads `LC_ID_DYLIB`, and — if the install
+  name is in the explicit `PATCH_INSTALL_NAMES` whitelist — rewrites
+  the first byte of the cstring through `DSCChunks.write_at_vma`.
+  Pure Python. Whitelist-based by design so an operator can comment
+  out individual entries to bisect.
+* `scripts/patchers/cfw.py patch-hv-vmm <binary>` —
+  standalone-Mach-O subcommand (used for the 6 on-device files).
+* `scripts/patchers/cfw.py patch-hv-vmm-dsc <chunks_dir>` —
+  DSC subcommand (used while the SystemOS Cryptex DMG is still
+  mounted on the host, before the device copy).
+* `scripts/patch_hv_vmm_userland.sh` — thin wrapper used by the
+  install scripts.
+* `scripts/cfw_install_dev.sh` — patches DSC chunks while the SysOS
+  DMG is mounted (inside step 1/7), then patches the 6 standalone
+  binaries via SSH (new step `[6.5/7]`).
+* `scripts/cfw_install_jb.sh` — pre-step before invoking
+  `cfw_install.sh`: decrypts the SysOS Cryptex into the cache
+  location `cfw_install.sh` already uses, mounts it, applies the
+  DSC patch, unmounts. The unmodified `cfw_install.sh` then sees
+  the cached (already-patched) DMG. Standalone binaries are patched
+  later via SSH (new step `[JB-3.5]`).
+
+### `kern.hv_vmm_present` kernel patcher — Part A + Part B (JB only)
+
+The `KernelJBPatchHvVmmRename` Swift patcher (Group B in `KernelJBPatcher.findAll()`)
+renames the sysctl OID and rewrites every kernel-internal occurrence of the
+old name so kexts continue to find it under the new name. Two parts.
+
+**Part A — OID name rename.** Finds the OID's `oid_name` cstring as
+the NUL-delimited bytes `\0hv_vmm_present\0` (exactly one match
+required in the kernelcache; on iPhone17,3 / iOS 26.1 this lives at
+file offset `0x964e0` inside `com.apple.kernel`). Flips byte 0 of the
+cstring `'h'` (0x68) → `'X'` (0x58). After the patch, the kernel's
+`sysctl_register_oid` keeps the OID's MIB and value (1) intact but
+the name resolver returns `ENOENT` for `kern.hv_vmm_present` and
+returns 1 for `kern.Xv_vmm_present`.
+
+**Part B — kernel-internal caller mangle.** After Part A, any
+kernel-side `sysctlbyname("kern.hv_vmm_present", …)` call gets
+ENOENT and falls into the caller's "not in a VM" branch — which on
+the bring-up build caused AMFI to panic with `AMFI: No PMGR?
+(ConfigurationSettings.cpp:388)` during ramdisk boot. Part B mangles
+every kernel-internal occurrence of the `kern.hv_vmm_present` name
+so callers continue to find the renamed OID. The mangle flips byte
+5 of the inner cstring (`'h'` after `kern.`) → `'X'`, producing
+`kern.Xv_vmm_present`.
+
+Two byte-aligned forms are searched, both anchored at the
+`kern.hv_vmm_present` substring:
+
+| Form | Needle | Where it lives | Mangle delta within needle |
+|------|--------|----------------|----------------------------|
+| (i) NUL-delimited cstring | `\0kern.hv_vmm_present\0` | `__TEXT,__cstring` of any kext that calls sysctlbyname by full name | +6 (skip leading NUL + 5) |
+| (ii) Sandbox-profile name token | `kern.hv_vmm_present\x0f` | Inside a compiled sandbox-profile blob within `com.apple.security.sandbox`. The `\x0f` byte is the sandbox-profile end-of-name marker; the token has no leading NUL. | +5 |
+
+On iPhone17,3 / iOS 26.1 / 23B85 the universe is 5 occurrences
+(verified by raw substring scan over the kernelcache buffer):
+
+| File offset | Fileset entry | Form |
+|-------------|---------------|------|
+| `0x541d56` | `com.apple.driver.AppleMobileFileIntegrity` | (i) cstring |
+| `0x81bdc3` | `com.apple.iokit.IOCryptoAcceleratorFamily` | (i) cstring |
+| `0xa6618b` | `com.apple.security.sandbox` | (ii) sandbox-profile name token |
+| `0xbb0d55` | `com.apple.security.sandbox` | (i) cstring |
+| `0xbce1f9` | `com.apple.filesystems.apfs` | (i) cstring |
+
+Part B emits one patch record per match (5 total, plus Part A's 1)
+under patch IDs `kernelcache_jb.hv_vmm_internal_caller_mangle` and
+`kernelcache_jb.hv_vmm_oid_rename`. Idempotent: a re-run detects
+already-mangled bytes (`kern.Xv_vmm_present` instead of
+`kern.hv_vmm_present`) and reports the patch as already applied.
+
+**Note on the sandbox-profile occurrence.** This was missed by the
+original Part B because its needle required NUL on both sides. The
+sandbox-profile blob stores OID names as TLV-framed tokens where the
+trailing byte is `\x0f` (sandbox EOT) rather than a NUL. Without the
+second needle, sandboxed callers that interpret the profile's
+`kern.hv_vmm_present`-matching rule would still match against the
+OLD name, while the OID itself has been renamed — so the rule's
+ALLOW/DENY/audit action would never fire. With the second needle,
+the rule's name token is rewritten to `kern.Xv_vmm_present` and
+sandboxed callers that hit the renamed OID match the (rewritten)
+rule as intended. Covered occurrence verified on
+iPhone17,3 / iOS 26.1 / 23B85 at file offset `0xa6618b`.
 
 ### CFW Installer Flow Matrix (Script-Level)
 

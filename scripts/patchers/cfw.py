@@ -23,6 +23,24 @@ Commands:
     patch-launchd-jetsam <binary>
         Patch launchd jetsam panic guard to avoid initproc crash loop.
 
+    patch-hv-vmm <binary>
+        Force every CANONICAL sysctlbyname("kern.hv_vmm_present", ...)
+        caller in the Mach-O at <binary> to read 0 (i.e. "not on a VM").
+        Used for the standalone executables in the device-likeness set.
+
+    patch-hv-vmm-dsc <chunks_dir> [--dry-run]
+        Same patch, applied in place to the DSC chunks under
+        <chunks_dir> (e.g. /System/Library/Caches/com.apple.dyld inside
+        the mounted SystemOS Cryptex). Targets a fixed list of identity,
+        store, and consumer-service dylibs; skips compute/accel libs.
+
+
+    list-hv-vmm-rootfs-paths
+        Print the list of rootfs binary paths that should be byte-5
+        mangled at install time (i.e. `ALL_KNOWN_ROOTFS_PATHS` minus
+        `DONT_PATCH_ROOTFS_PATHS`), one per line. Consumed by the
+        JB-3.5 / [6.5/7] install-script loop.
+
     inject-daemons <launchd.plist> <daemon_dir>
         Inject bash/dropbear/trollvnc into launchd.plist.
 
@@ -32,6 +50,7 @@ Commands:
 
 Dependencies:
     pip install capstone keystone-engine
+    ipsw CLI in $PATH (only required for patch-hv-vmm-dsc)
 """
 
 import os
@@ -46,12 +65,18 @@ if __name__ == "__main__":
     from patchers.cfw_patch_cache_loader import patch_launchd_cache_loader
     from patchers.cfw_patch_mobileactivationd import patch_mobileactivationd
     from patchers.cfw_patch_jetsam import patch_launchd_jetsam
+    from patchers.cfw_patch_hv_vmm import patch_hv_vmm
+    from patchers.cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
+    from patchers.cfw_patch_hv_vmm_rootfs import get_patch_paths as get_hv_vmm_rootfs_paths
     from patchers.cfw_daemons import parse_cryptex_paths, inject_daemons
 else:
     from .cfw_patch_seputil import patch_seputil
     from .cfw_patch_cache_loader import patch_launchd_cache_loader
     from .cfw_patch_mobileactivationd import patch_mobileactivationd
     from .cfw_patch_jetsam import patch_launchd_jetsam
+    from .cfw_patch_hv_vmm import patch_hv_vmm
+    from .cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
+    from .cfw_patch_hv_vmm_rootfs import get_patch_paths as get_hv_vmm_rootfs_paths
     from .cfw_daemons import parse_cryptex_paths, inject_daemons
 
 
@@ -98,6 +123,32 @@ def main():
         if not patch_launchd_jetsam(sys.argv[2]):
             sys.exit(1)
 
+    elif cmd == "patch-hv-vmm":
+        if len(sys.argv) < 3:
+            print("Usage: patch_cfw.py patch-hv-vmm <binary> [--dry-run]")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv[3:]
+        n = patch_hv_vmm(sys.argv[2], dry_run=dry_run)
+        # Exit 0 for both "patched N>=0" and "no canonical site found"; only
+        # exit non-zero if we couldn't even parse the file (raised exception).
+        sys.exit(0)
+
+    elif cmd == "patch-hv-vmm-dsc":
+        if len(sys.argv) < 3:
+            print("Usage: patch_cfw.py patch-hv-vmm-dsc <chunks_dir> [--dry-run]")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv[3:]
+        results = patch_hv_vmm_in_dsc(sys.argv[2], dry_run=dry_run)
+        sys.exit(0)
+
+
+    elif cmd == "list-hv-vmm-rootfs-paths":
+        # Print one path per line for shell consumption (the JB-3.5 /
+        # [6.5/7] install-script loops iterate this).
+        for p in get_hv_vmm_rootfs_paths():
+            print(p)
+        sys.exit(0)
+
     elif cmd == "inject-daemons":
         if len(sys.argv) < 4:
             print("Usage: patch_cfw.py inject-daemons <launchd.plist> <daemon_dir>")
@@ -129,6 +180,7 @@ def main():
         print(f"Unknown command: {cmd}")
         print("Commands: cryptex-paths, patch-seputil, patch-launchd-cache-loader,")
         print("          patch-mobileactivationd, patch-launchd-jetsam,")
+        print("          patch-hv-vmm, patch-hv-vmm-dsc, list-hv-vmm-rootfs-paths,")
         print("          inject-daemons, inject-dylib")
         sys.exit(1)
 

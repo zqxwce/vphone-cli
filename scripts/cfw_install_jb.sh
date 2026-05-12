@@ -30,6 +30,64 @@ _resolve_python3() {
 }
 PYTHON3="$(_resolve_python3)"
 
+
+# ────────────────────────────────────────────────────────────────────
+# Pre-step: patch hv_vmm_present user-mode consumers in the SystemOS
+# Cryptex's DSC chunks BEFORE running cfw_install.sh.
+#
+# cfw_install.sh decrypts the SystemOS Cryptex AEA into
+# $TEMP_DIR/CryptexSystemOS.dmg and reuses it on subsequent runs. We
+# pre-create that decrypted DMG here, mount it, patch the DSC chunks
+# in place, unmount, and let cfw_install.sh pick up the cached
+# (already-patched) DMG. cfw_install.sh itself is unmodified — this
+# is exactly what the user requested for the JB variant: device-like
+# user-mode patches without touching the regular install path.
+# ────────────────────────────────────────────────────────────────────
+VM_DIR_ABS="$(cd "${VM_DIR:-.}" && pwd)"
+JB_TEMP_DIR="$VM_DIR_ABS/.cfw_temp"
+JB_SYSOS_DMG="$JB_TEMP_DIR/CryptexSystemOS.dmg"
+JB_MNT_SYSOS="$JB_TEMP_DIR/mnt_sysos_hv_vmm"
+mkdir -p "$JB_TEMP_DIR"
+
+# Find the restore directory (same logic as cfw_install.sh)
+JB_RESTORE_DIR=""
+for d in "$VM_DIR_ABS"/iPhone*_Restore; do
+    [[ -d "$d" ]] && { JB_RESTORE_DIR="$d"; break; }
+done
+
+if [[ -z "$JB_RESTORE_DIR" ]]; then
+    echo "[!] hv_vmm DSC patch: no restore directory found, skipping"
+elif [[ ! -f "$JB_SYSOS_DMG" ]]; then
+    # Not yet decrypted — decrypt to the cache location cfw_install.sh expects.
+    echo "[*] hv_vmm DSC patch: decrypting SystemOS into cache..."
+    JB_CRYPTEX_SYSOS=$("$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" cryptex-paths "$JB_RESTORE_DIR/iPhone-BuildManifest.plist" | head -1)
+    JB_AEA_KEY=$(ipsw fw aea --key "$JB_RESTORE_DIR/$JB_CRYPTEX_SYSOS")
+    aea decrypt -i "$JB_RESTORE_DIR/$JB_CRYPTEX_SYSOS" -o "$JB_SYSOS_DMG" -key-value "$JB_AEA_KEY"
+fi
+
+if [[ -f "$JB_SYSOS_DMG" ]]; then
+    # Mount, patch chunks, unmount. Idempotent: re-running on an already
+    # patched DMG is a no-op (patcher detects already-patched form).
+    echo "[*] hv_vmm DSC patch: mounting cached SystemOS DMG..."
+    mkdir -p "$JB_MNT_SYSOS"
+    sudo hdiutil detach "$JB_MNT_SYSOS" -force 2>/dev/null || true
+    sudo hdiutil attach -mountpoint "$JB_MNT_SYSOS" "$JB_SYSOS_DMG" -nobrowse -owners off
+
+    JB_DSC_CHUNKS_DIR="$JB_MNT_SYSOS/System/Library/Caches/com.apple.dyld"
+    if [[ -d "$JB_DSC_CHUNKS_DIR" ]]; then
+        echo "[*] hv_vmm DSC patch: patching chunks under $JB_DSC_CHUNKS_DIR..."
+        "$SCRIPT_DIR/patch_hv_vmm_userland.sh" dsc "$JB_DSC_CHUNKS_DIR"
+        echo "[+] hv_vmm DSC patch: chunks patched"
+    else
+        echo "[-] hv_vmm DSC patch: $JB_DSC_CHUNKS_DIR not found, skipping"
+    fi
+
+    sudo hdiutil detach "$JB_MNT_SYSOS" -force
+fi
+
+# Now run the regular CFW install. It will see the cached (patched)
+# CryptexSystemOS.dmg and use it as-is, so the patched DSC chunks land
+# in /mnt1/System/Cryptexes/OS on the device.
 # ════════════════════════════════════════════════════════════════
 # Step 1: Run base CFW install (skip halt — we continue with JB phases)
 # ════════════════════════════════════════════════════════════════

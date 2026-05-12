@@ -335,6 +335,26 @@ ssh_cmd "/bin/rm -rf /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
 ssh_cmd "/bin/mkdir -p /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
 ssh_cmd "/bin/chmod 0755 /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
 
+# Patch hv_vmm_present user-mode consumers in DSC chunks (dev variant)
+# --------------------------------------------------------------------
+# Forces every CANONICAL sysctlbyname("kern.hv_vmm_present", ...) call in
+# the identity / store / consumer-service dylibs to read 0 ("not on a
+# VM"), without changing the kernel-side OID and without touching
+# compute/accel libs (CoreML, Espresso, ANE, etc.) — see
+# research/hv_vmm_present_usermode_xrefs.md.
+#
+# We patch the SystemOS Cryptex's DSC chunks while the DMG is still
+# mounted on the host; the modified bytes ride along with the
+# subsequent scp_to into /mnt1/System/Cryptexes/OS.
+DSC_CHUNKS_DIR="$MNT_SYSOS/System/Library/Caches/com.apple.dyld"
+if [[ -d "$DSC_CHUNKS_DIR" ]]; then
+    echo "  Patching hv_vmm_present user-mode consumers in DSC chunks..."
+    "$SCRIPT_DIR/patch_hv_vmm_userland.sh" dsc "$DSC_CHUNKS_DIR"
+    echo "  [+] DSC user-mode hv_vmm_present patches applied"
+else
+    echo "  [-] WARNING: $DSC_CHUNKS_DIR not present, skipping DSC hv_vmm_present patch"
+fi
+
 # Copy Cryptex files to device
 echo "  Copying Cryptexes to device (this takes ~3 minutes)..."
 scp_to "$MNT_SYSOS/." "/mnt1/System/Cryptexes/OS"
@@ -445,6 +465,14 @@ scp_to "$TEMP_DIR/mobileactivationd" "/mnt1/usr/libexec/mobileactivationd"
 ssh_cmd "/bin/chmod 0755 /mnt1/usr/libexec/mobileactivationd"
 
 echo "  [+] mobileactivationd patched"
+
+# NOTE: a [6.5/7] step previously SCP'd rootfs Mach-Os off the device,
+# byte-5-mangled their `kern.hv_vmm_present` cstring, ldid-re-signed,
+# and pushed back. That approach is fundamentally broken for
+# boot-tasks because `ldid_sign` overwrites the code-signing
+# identifier; see the corresponding note in cfw_install_jb.sh for
+# details. Reverted. Standalone rootfs patching to be redone host-
+# side via slot-hash re-attestation (no re-signing).
 
 # ═══════════ 7/7 LAUNCHDAEMONS + LAUNCHD.PLIST ══════════════
 echo ""
