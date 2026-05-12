@@ -412,3 +412,90 @@ so each new value is written at the same slot length as the original.
 The `compatible` patch uses a new `PropertyValue.bytes(Data)` case that
 takes a pre-built byte blob (necessary because the multi-string layout
 contains embedded NULs).
+
+## 10. Post-restore DT identity rewrite (JB-6)
+
+The properties under "known-bad from prior rounds" (root `model`, root
+`target-type`) cannot be edited at fw_patch time because
+`restored_external` / iBoot's restore mode cross-checks them against the
+BuildManifest's signed `SupportedProductTypes`. But that cross-check
+fires **only during installation**. After restore completes, the boot
+path is
+
+```
+AVPBooter (patched)
+   → iBSS / iBEC (image4_validate_property_callback bypass patches)
+   → LLB (image4 bypass + rootfs bypass patches)
+   → iBoot (research) → DT loaded from disk
+   → kernel → sysctls populated from DT
+```
+
+The image4 bypass patches we already ship are what allow every
+fw_patch-time IM4P modification to boot at all — they make the IM4M's
+stored digest irrelevant on subsequent boots. So an additional IM4P
+modification applied **after** restore completes is in-policy with the
+project's existing trust-chain bypass.
+
+The **JB-6** install step exploits this. While the install pipeline
+still has `/mnt5` (the preboot volume) mounted in ramdisk mode, it:
+
+1. Pulls `/mnt5/<boot-hash>/usr/standalone/firmware/devicetree.img4` to
+   the host.
+2. Runs `scripts/patchers/cfw_patch_post_restore_dt.py`, which:
+   - Unwraps img4 → IM4P → decompresses LZFSE → DT blob (via pyimg4).
+   - Applies the three restore-unsafe edits (table below).
+   - Re-compresses LZFSE → repacks IM4P → repacks IMG4 with the original
+     IM4M.
+3. Pushes the modified img4 back to the same path.
+4. The device reboots out of ramdisk; iBoot loads the modified DT;
+   kernel populates `machine_info` from the new property values.
+
+| Property                  | Before (post-Tier-1b state on disk)                                       | After (JB-6 rewrites to)                                                | Slot |
+|---------------------------|---------------------------------------------------------------------------|-------------------------------------------------------------------------|------|
+| `device-tree.model`       | `"iPhone99,11"`                                                           | `"iPhone17,3"`                                                          | 12   |
+| `device-tree.target-type` | `"VPHONE600"`                                                             | `"D47"`                                                                 | 10   |
+| `device-tree.compatible`  | `["VPHONE600AP", "iPhone17,3", "AppleVirtualPlatformARM"]` (post-Tier-1b) | `["D47AP", "VPHONE600AP", "AppleVirtualPlatformARM"]` (reordered)       | 48   |
+
+The `compatible` rewrite is a **reorder**, not a replacement: VPHONE600AP
+stays in the list (now as the second entry), so IOKit's platform-expert
+match against the AppleVMApple1IO kext still binds. `compatible[0]`
+becomes D47AP, which is what userland's `hw.model` resolves to.
+
+Userland-visible effects after the next boot:
+
+- `sysctl hw.machine` → `"iPhone17,3"` (was `"iPhone99,11"`)
+- `sysctl hw.product` → `"iPhone17,3"` (was `"iPhone99,11"`)
+- `sysctl hw.model`   → `"D47AP"`      (was `"VPHONE600AP"`)
+- Settings → General → About → Model Identifier reflects the new
+  ProductType.
+- Every `MGCopyAnswer` key backed by `IOPlatformExpertDevice` properties
+  picks up the new values.
+
+Idempotence: the patcher reads the existing DT, applies edits, and
+writes back only if there's a difference. A second run on an
+already-patched devicetree.img4 detects target-state-already-met and
+exits without rewriting.
+
+Wiring:
+
+* `scripts/patchers/cfw_patch_post_restore_dt.py` — host-side patcher.
+  Uses pyimg4 for img4↔IM4P+LZFSE round-trip; mirrors the DT format
+  parser/serializer from `DeviceTreePatcher.swift`.
+* `scripts/cfw_install_jb.sh [JB-6]` — install step that runs after
+  JB-5 (LaunchDaemon deploy) and before the CLEANUP/umount block.
+  Discovers the boot-manifest-hash via the same `get_boot_manifest_hash`
+  helper used by earlier install steps. Tolerates a missing
+  devicetree.img4 with warn-and-skip rather than aborting the install.
+
+Why this is restore-safe (and the fw_patch-time version was not):
+
+- **fw_patch-time path** modifies the IM4P bytes that are sent during
+  restore. iBoot's restore mode reads each IM4P and (via the image4
+  validation callback the iBSS/iBEC/LLB patches already neuter) accepts
+  its digest mismatch — but some other path inside `restored_external`
+  enforces the top-level `SupportedProductTypes` check independently and
+  rejects DT.model values that don't appear in that list.
+- **JB-6 post-restore path** never re-runs the BuildManifest check.
+  Subsequent boots validate IM4P contents against the IM4M only — which
+  the image4 bypass patches already wave through. So the same byte
+  change that's fatal at restore is harmless after restore.

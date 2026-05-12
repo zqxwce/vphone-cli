@@ -30,6 +30,11 @@ _resolve_python3() {
 }
 PYTHON3="$(_resolve_python3)"
 
+# ════════════════════════════════════════════════════════════════
+# Step 1: Run base CFW install (skip halt — we continue with JB phases)
+# ════════════════════════════════════════════════════════════════
+echo "[*] cfw_install_jb.sh — Installing CFW + JB extensions..."
+echo ""
 
 # ────────────────────────────────────────────────────────────────────
 # Pre-step: patch hv_vmm_present user-mode consumers in the SystemOS
@@ -88,11 +93,6 @@ fi
 # Now run the regular CFW install. It will see the cached (patched)
 # CryptexSystemOS.dmg and use it as-is, so the patched DSC chunks land
 # in /mnt1/System/Cryptexes/OS on the device.
-# ════════════════════════════════════════════════════════════════
-# Step 1: Run base CFW install (skip halt — we continue with JB phases)
-# ════════════════════════════════════════════════════════════════
-echo "[*] cfw_install_jb.sh — Installing CFW + JB extensions..."
-echo ""
 CFW_SKIP_HALT=1 zsh "$SCRIPT_DIR/cfw_install.sh" "$VM_DIR"
 
 # ════════════════════════════════════════════════════════════════
@@ -340,6 +340,7 @@ ssh_cmd "/bin/chmod 0755 /mnt1/usr/libexec/debugserver"
 
 echo "  [+] debugserver entitlements patched"
 
+
 # ═══════════ JB-3.5 PATCH watchdogd hv_vmm_present cache ══════
 #
 # Background: the kernel-side OID rename (KernelJBPatchHvVmmRename)
@@ -494,6 +495,49 @@ with open(sys.argv[1], 'wb') as f:
     scp_to "$TEMP_DIR/launchd.plist" "/mnt1/System/Library/xpc/launchd.plist"
     ssh_cmd "/bin/chmod 0644 /mnt1/System/Library/xpc/launchd.plist"
     echo "  [+] com.vphone.jb-setup.plist injected into launchd.plist"
+fi
+
+# ═══════════ JB-6 POST-RESTORE DT IDENTITY REWRITE ════════════
+#
+# Apply the three restore-unsafe DT property edits that broke earlier
+# attempts when applied at fw_patch time:
+#   root/model        iPhone99,11 -> iPhone17,3
+#   root/target-type  VPHONE600   -> D47
+#   root/compatible   reordered to [D47AP, VPHONE600AP, AppleVirtualPlatformARM]
+#
+# These are restore-time-fatal (restored_external / iBoot's restore mode
+# cross-checks model+target-type against the BuildManifest's signed
+# identity) but NOT boot-time-fatal — the existing iBSS/iBEC/LLB
+# image4_validate_property_callback bypass patches accept any IM4P
+# contents on subsequent boots.
+#
+# /mnt5 is still mounted at this point in the install flow (the umount
+# happens in the CLEANUP block below). We scp the live devicetree.img4
+# down, patch it on the host, scp it back. Next boot, iBoot loads the
+# modified DT, kernel populates machine_info from the new values, and
+# sysctl hw.machine / hw.product / hw.model flip to iPhone17,3 / D47 /
+# (whatever IOPlatformExpert resolves from compatible[0]=D47AP).
+echo ""
+echo "[JB-6] Post-restore DT identity rewrite..."
+
+if [[ -z "$BOOT_HASH" ]]; then
+    BOOT_HASH="$(get_boot_manifest_hash)"
+fi
+if [[ -z "$BOOT_HASH" ]]; then
+    echo "  [-] BOOT_HASH not discoverable, skipping JB-6"
+else
+    JB6_DT_REMOTE="/mnt5/$BOOT_HASH/usr/standalone/firmware/devicetree.img4"
+    JB6_DT_LOCAL="$TEMP_DIR/devicetree.img4"
+    if ssh_cmd "test -f '$JB6_DT_REMOTE'" 2>/dev/null; then
+        scp_from "$JB6_DT_REMOTE" "$JB6_DT_LOCAL"
+        "$PYTHON3" "$SCRIPT_DIR/patchers/cfw_patch_post_restore_dt.py" "$JB6_DT_LOCAL"
+        scp_to "$JB6_DT_LOCAL" "$JB6_DT_REMOTE"
+        ssh_cmd "/usr/sbin/chown 0:0 $JB6_DT_REMOTE"
+        ssh_cmd "/bin/chmod 0644 $JB6_DT_REMOTE"
+        echo "  [+] devicetree.img4 rewritten in place"
+    else
+        echo "  [-] $JB6_DT_REMOTE not found, skipping JB-6"
+    fi
 fi
 
 # ═══════════ CLEANUP ═════════════════════════════════════════
