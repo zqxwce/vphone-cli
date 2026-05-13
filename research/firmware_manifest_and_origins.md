@@ -499,3 +499,71 @@ Why this is restore-safe (and the fw_patch-time version was not):
   Subsequent boots validate IM4P contents against the IM4M only — which
   the image4 bypass patches already wave through. So the same byte
   change that's fatal at restore is harmless after restore.
+
+## 11. Build-version rewrite (JB-7, opt-in)
+
+**Opt-in step**. JB-7 runs only when the `SPOOF_BUILD` environment
+variable is set — e.g. `make setup_machine JB=1 SPOOF_BUILD=23F77`, or
+`make cfw_install_jb SPOOF_BUILD=23F77` if you're re-running just the
+CFW phase. When omitted/empty the step is skipped entirely and the
+build identifier stays at whatever the IPSW shipped.
+
+The iPhone IPSW we install from ships with build identifier `23B85` (iOS
+26.1). iOS displays this string in Settings → General → About → "Build"
+and exposes it through `MGCopyAnswer("BuildVersion")`, `CoreFoundation`'s
+`_CFCopyServerVersionDictionary`, App Store telemetry, and every other
+framework path that reads `/System/Library/CoreServices/SystemVersion.plist`.
+
+The build identifier lives in exactly two on-device plist files. Both
+are plain XML/binary plists (no Apple-side per-file signature), and
+both live on volumes that are writable at install time:
+
+| Path                                                                                | Volume       | Role                                                                 |
+|-------------------------------------------------------------------------------------|--------------|----------------------------------------------------------------------|
+| `/System/Library/CoreServices/SystemVersion.plist`                                  | rootfs       | The canonical source. Read by every userland identity API.           |
+| `/private/preboot/Cryptexes/OS/System/Library/CoreServices/SystemVersion.plist`     | preboot      | Cryptex-side copy. Read by Cryptex-aware OS-version queries.         |
+
+The **JB-7** install step rewrites the `ProductBuildVersion` key in both
+plists to a target value (currently `23F77`):
+
+```
+ProductBuildVersion: "23B85" → "23F77"
+```
+
+`ProductVersion` (`26.1`), `ProductName` (`iPhone OS`), `BuildID`,
+`SystemImageID`, and `ProductCopyright` are left untouched.
+
+Wiring:
+
+* `scripts/patchers/cfw_patch_build_version.py` — host-side plistlib-based
+  rewriter. Auto-detects XML vs binary plist format and preserves it on
+  write. Idempotent — a re-run on an already-patched plist exits without
+  rewriting.
+* `scripts/cfw_install_jb.sh [JB-7]` — install step that runs after JB-6
+  (post-restore DT) and before CLEANUP. For each of the two plist paths
+  it scp_from's the file to host, runs the patcher with target `23F77`,
+  scp_to's the file back. Tolerates missing-on-device with warn+continue.
+
+What this **does not** flip:
+
+- `sysctl kern.osversion` — populated at boot from a kernel global
+  initialized from boot args, not from `SystemVersion.plist`. The kernel
+  image we ship was built against `23B78` (the PCC vphone600 /
+  vresearch101 build identifier; visible in 621 kext-Info.plist
+  embedded `DTPlatformBuild` / `DTSDKBuild` blobs inside the kernelcache
+  but never read by `kern.osversion` at runtime). To flip
+  `kern.osversion` we'd need to either rebuild the kernelcache with a
+  different `OS_BUILD_VERSION` or patch the kernel boot args path — out
+  of scope for this round.
+- `SystemVersionCompat.plist` — carries `23B34a` / `19.1`, a legacy
+  iOS-19 marker for `MacCatalyst`-style version queries. Not user-
+  visible, deliberately untouched.
+- DSC dylib internals — the apparent `23B85` byte sequence in DSC chunk
+  `.21` is a Swift mangled-name UUID-uniquing substring
+  (`_TtC11MediaCoreUIP33_98519F523B8515A67EEFBCB0824D82807Counter`), not
+  a build identifier. Patching it would corrupt a Swift symbol name.
+
+Order of operations: this step runs **after** JB-6 (the DT identity
+rewrite) so that any post-restore identity work targeting `/mnt5` has
+completed before we modify the Cryptex's SystemVersion.plist (which
+lives on the same volume).

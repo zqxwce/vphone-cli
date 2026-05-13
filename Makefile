@@ -52,6 +52,9 @@ help:
 	@echo "             SUDO_PASSWORD=...         Preload sudo credential for setup flow"
 	@echo "             NO_BINPACK=1              Excludes the SSH, VNC, ... binaries from being installed (patchless-only, currently)"
 	@echo "             NO_VPHONED=1              Excludes vphoned from being installed (patchless-only, currently)"
+	@echo "             SPOOF_BUILD=<id>          (JB only) Rewrite ProductBuildVersion in SystemVersion.plist to <id>"
+	@echo "                                       e.g. SPOOF_BUILD=23F77 makes Settings -> About show that build."
+	@echo "                                       Omitted/empty -> JB-7 skipped, build version stays at the IPSW value."
 	@echo ""
 	@echo "Setup (one-time):"
 	@echo "  make setup_tools             Install all tools (brew, trustcache, insert_dylib, venv+pymobiledevice3)"
@@ -132,6 +135,7 @@ setup_machine:
 	NONE_INTERACTIVE="$(NONE_INTERACTIVE)" \
 	NO_BINPACK="$(NO_BINPACK)" \
 	NO_VPHONED="$(NO_VPHONED)" \
+	SPOOF_BUILD="$(SPOOF_BUILD)" \
 	zsh $(SCRIPTS)/setup_machine.sh \
 		$(if $(filter 1 true yes YES TRUE,$(JB)),--jb,) \
 		$(if $(filter 1 true yes YES TRUE,$(DEV)),--dev,) \
@@ -438,4 +442,4 @@ cfw_install_dev:
 	cd $(VM_DIR) && $(if $(SSH_PORT),SSH_PORT="$(SSH_PORT)") _VPHONE_PATH="$$PATH" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_dev.sh" .
 
 cfw_install_jb:
-	cd $(VM_DIR) && $(if $(SSH_PORT),SSH_PORT="$(SSH_PORT)") _VPHONE_PATH="$$PATH" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_jb.sh" .
+	cd $(VM_DIR) && $(if $(SSH_PORT),SSH_PORT="$(SSH_PORT)") $(if $(SPOOF_BUILD),SPOOF_BUILD="$(SPOOF_BUILD)") _VPHONE_PATH="$$PATH" zsh "$(CURDIR)/$(SCRIPTS)/cfw_install_jb.sh" .
