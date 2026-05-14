@@ -306,13 +306,20 @@ public final class FirmwarePipeline {
             }()
         ))
 
-        // 7. DeviceTree — same base property patches for every variant.
+        // 7. DeviceTree — base property patches for every variant. EXP additionally
+        //    applies the 8 identity-rewrite properties (Tier 1b + 1c) that flip the
+        //    device's userland-visible identity toward D47AP / iPhone17,3.
+        let dtIncludeIdentity = variant == .exp
         components.append(ComponentDescriptor(
             name: "DeviceTree",
             inRestoreDir: true,
             searchPatterns: ["Firmware/all_flash/DeviceTree.vphone600ap.im4p"],
             patcherFactories: [{ data, verbose in
-                DeviceTreePatcher(data: data, verbose: verbose)
+                DeviceTreePatcher(
+                    data: data,
+                    verbose: verbose,
+                    includeIdentityPatches: dtIncludeIdentity
+                )
             }]
         ))
         
