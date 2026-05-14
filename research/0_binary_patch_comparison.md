@@ -1,4 +1,30 @@
-# Patch Comparison: Regular / Development / Jailbreak
+# Patch Comparison: Regular / Development / Jailbreak / Experimental
+
+> **EXP is a JB superset.** Everything in the baseline tables below that is `Y`
+> for JB is also `Y` for EXP. The columns are kept at three variants to avoid
+> noise — the only place EXP and JB diverge is the **Experimental additions**
+> below, all of which are EXP-only (JB and the other variants are deliberately
+> unaffected). The EXP-only items, taken together:
+>
+> - **Kernel** — `KernelEXPPatcher` runs the `hv_vmm_present` sysctl OID rename
+>   plus kernel-internal caller cstring/sandbox-profile-token mangle (formerly
+>   wired into JB Group B as JB-26 — moved out).
+> - **DeviceTree at fw_patch time** — 8 identity-rewrite property patches
+>   (Tier 1b + 1c) flipping userland-visible identity surfaces toward
+>   D47AP / iPhone17,3.
+> - **DSC user-mode** — byte-5 cstring mangle of `kern.hv_vmm_present` with a
+>   sign-in blacklist + per-page slot re-attestation (`cfw_patch_hv_vmm_dsc.py`),
+>   companion to the kernel rename.
+> - **watchdogd (EXP-JB-3.5)** — surgical 2-instruction patch + slot re-attest;
+>   forces the cached "am I a VM?" byte to `1` so watchdogd's clean-exit branch
+>   runs.
+> - **Post-restore DT rewrite (EXP-JB-6)** — host-side rewrite of `devicetree.img4`
+>   on the ramdisk's mounted rootfs for the three restore-fatal identity
+>   properties (root `model`, `target-type`, `compatible[0]`) that broke
+>   restore when applied at fw_patch time.
+> - **SystemVersion.plist `ProductBuildVersion` (EXP-JB-7, opt-in)** — gated on
+>   `SPOOF_BUILD=<id>`. Rewrites the build identifier in the rootfs and
+>   cryptex copies of `SystemVersion.plist`.
 
 ## Boot Chain Patches
 
@@ -103,6 +129,16 @@
 | JB-24 | B     | `patch_vm_fault_enter_prepare`        | `_vm_fault_enter_prepare`                                                                            | Force `cs_bypass` fast path in runtime fault validation                                                                                                                              |     Y      |
 | JB-25 | B     | `patch_vm_map_protect`                | `_vm_map_protect`                                                                                    | Skip upstream write-downgrade gate in `vm_map_protect`                                                                                                                               |     Y      |
 
+### EXP-Only Kernel Methods (Reference List)
+
+Runs in `KernelEXPPatcher.findAll()` (chained after `KernelPatcher` +
+`KernelJBPatcher` for the `.exp` variant only — JB and other variants
+do NOT execute these).
+
+| #      | Group | Method                | Function                                                              | Purpose                                                                                                                                                                                                                                                                                                                                                                       | EXP Enabled |
+| ------ | ----- | --------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------: |
+| EXP-01 | B     | `patch_hv_vmm_rename` | sysctl OID name cstring `"hv_vmm_present"` → `"Xv_vmm_present"` (Part A) + every kernel-internal occurrence of `kern.hv_vmm_present` cstring/sandbox-profile token mangled at byte 5 (Part B) | Rename the `kern.hv_vmm_present` OID's name in place (`'h' → 'X'` at offset 0 of the 14-byte cstring). After this: `sysctlbyname("kern.hv_vmm_present")` returns ENOENT; `sysctlbyname("kern.Xv_vmm_present")` returns the original int value (1). Part B mangles every kernel-internal caller — AMFI, IOCryptoAcceleratorFamily, sandbox-profile token, apfs — so they keep hitting the renamed OID. Companion to the user-mode blacklist-flip mangle in `cfw_patch_hv_vmm_dsc.py`. |      Y      |
+
 ## CFW Installation Patches
 
 ### Binary Patches Applied Over SSH Ramdisk
@@ -115,6 +151,8 @@
 | 4   | Plist injection           | `launchd.plist`        | bash/dropbear/trollvnc/vphoned daemons                        |    Y    |  Y  |  Y  |
 | 5   | `b` (skip jetsam guard)   | `launchd`              | Prevent jetsam panic on boot                                  |    -    |  Y  |  Y  |
 | 6   | `LC_LOAD_DYLIB` injection | `launchd`              | Load short alias `/b` (copy of `launchdhook.dylib`) at launch |    -    |  -  |  Y  |
+| 7   | cstring byte 5 mangle `'h' → 'X'` (`"kern.hv_vmm_present"` → `"kern.Xv_vmm_present"`) + per-page slot-hash re-attestation, BLACKLIST semantics — **EXP only** | DSC dylibs        | Companion to EXP kernel rename (`KernelEXPPatcher.patchHvVmmRename`). The mangle is applied to every DSC dylib EXCEPT those in `DONT_PATCH_INSTALL_NAMES` (sign-in / device-likeness consumers, ~15 entries). Patched dylibs query `kern.Xv_vmm_present` and get the truthful 1 (graphics / accel passthrough). Blacklisted dylibs keep the original cstring, hit ENOENT on the renamed kernel, cache 0, lie about VM presence. On `codeSigningMonitor == 2` hardware the byte-mangle alone causes `CODESIGNING/Invalid Page` SIGKILL because TXM enforces per-page hashes; the re-attestation pass recomputes the SHA-256 slot in the chunk's `CS_CodeDirectory` for every modified 16 KiB page. See `scripts/patchers/cfw_dsc_codesign.py` and `cfw_patch_hv_vmm_dsc.py`. |    -    |  -  |  -  |
+| 8   | (removed — was: standalone-binary mangle in 6 rootfs Mach-Os via SSH) | n/a               | Removed in the blacklist-flip redesign. With the EXP kernel rename in place, the 6 rootfs binaries (MobileActivationMigrator, CheckerBoard, StoreKitUISceneService, storekitd, appstored, CorePrescriptionService) get the desired "cache 0 / not in a VM" behavior for free: they keep their original cstring, hit ENOENT on the renamed kernel sysctl, defensive `cbnz w0, skip` leaves the cached byte at BSS-zero. No SSH-time standalone patch needed. |    -    |  -  |  -  |
 
 ### Installed Components
 
@@ -130,47 +168,385 @@
 | 8   | BaseBin hooks              | `systemhook.dylib` / `launchdhook.dylib` / `libellekit.dylib` -> `/cores/` plus `/b` alias for `launchdhook.dylib` |    -    |  -  |  Y  |
 | 9   | `TweakLoader.dylib`        | Lean user-tweak loader built from source and installed to `/var/jb/usr/lib/TweakLoader.dylib`                      |    -    |  -  |  Y  |
 
+### `kern.hv_vmm_present` user-mode patcher (EXP only)
+
+Companion to the EXP kernel patcher (`KernelEXPPatcher.patchHvVmmRename`).
+Mangles byte 5 of every `kern.hv_vmm_present` cstring inside DSC dylibs
+EXCEPT those in `DONT_PATCH_INSTALL_NAMES` (sign-in / device-likeness
+consumers, ~15 entries). Patched dylibs query the renamed OID and get the
+truthful 1 (graphics + accel passthrough); blacklisted dylibs keep the
+original cstring, hit ENOENT on the renamed kernel, and defensively cache 0
+("not running on a VM") for sign-in / device-attestation surfaces.
+Source-of-truth research: `research/hv_vmm_present_usermode_xrefs.md`.
+
+JB and other variants are NOT affected by this patcher.
+
+**Patch shape (every site)** — cstring mangle:
+
+```
+Before (cstring section bytes, 20 bytes total):
+    "kern.hv_vmm_present\0"
+    6B 65 72 6E 2E 68 76 5F 76 6D 6D 5F 70 72 65 73 65 6E 74 00
+
+After (1 byte change at offset 0):
+    "Xern.hv_vmm_present\0"
+    58 65 72 6E 2E 68 76 5F 76 6D 6D 5F 70 72 65 73 65 6E 74 00
+    ^^
+```
+
+The kernel's name-to-MIB translation fails with `ENOENT` when the
+caller asks for `"Xern.hv_vmm_present"`, so `sysctlbyname` returns
+-1. The canonical post-call check (`cbnz w0, skip` or
+`cmp w0,#0 ; b.ne skip`) then takes the skip-cache path; the cached
+"is_vmm" byte stays at its initial value (BSS-zero = 0).
+
+We don't modify executable code at all — only one byte of read-only
+string data. The kernel call still happens (with the wrong name), so
+any sysctl-tracing infrastructure can still see activity.
+
+Idempotent: a re-scan for the literal `"kern.hv_vmm_present\0"` finds
+no occurrences in already-mangled dylibs, so the patcher does no work
+on a re-run.
+
+**DSC-side patches** — driven by an explicit whitelist
+(`PATCH_INSTALL_NAMES` in `scripts/patchers/cfw_patch_hv_vmm_dsc.py`)
+applied to chunks under
+`SystemOS/System/Library/Caches/com.apple.dyld/`. Comment a line in
+the whitelist to skip that dylib on the next install — useful for
+bisecting which consumer is responsible for an observable change.
+
+| Dylib                                                     | Component role (paraphrased)                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------- |
+| `usr/lib/libMobileGestalt.dylib`                          | Backs `MGCopyAnswer("hv-vmm-present")` — highest fan-in       |
+| `PrivateFrameworks/AAAFoundation.framework/AAAFoundation` | Apple ID anti-abuse plumbing                                  |
+| `PrivateFrameworks/AuthKit.framework/AuthKit`             | Sign-in-with-Apple-ID / iCloud auth                           |
+| `PrivateFrameworks/IDSFoundation.framework/IDSFoundation` | Apple Identity Service core (iMessage / FaceTime backbone)    |
+| `PrivateFrameworks/DeviceIdentity.framework/DeviceIdentity` | Device-binding / device class identity                     |
+| `PrivateFrameworks/DeviceCheckInternal.framework/...`     | DeviceCheck attestation                                       |
+| `PrivateFrameworks/MobileActivation.framework/...`        | Activation flow                                               |
+| `PrivateFrameworks/ApplePushService.framework/...`        | APNS client (claims device characteristics on connect)        |
+| `PrivateFrameworks/AppStoreUtilities.framework/...`       | Store / IAP support                                           |
+| `PrivateFrameworks/CorePrescription.framework/...`        | Health prescription store sync gate                           |
+| `PrivateFrameworks/CoreCDP.framework/CoreCDP`             | CDP (cloud key-vault / iCloud Drive plumbing)                 |
+| `PrivateFrameworks/EmailFoundation.framework/...`         | Mail account heuristics                                       |
+| `PrivateFrameworks/PhotoFoundation.framework/...`         | Photos asset visibility heuristics                            |
+| `PrivateFrameworks/FindMyBase.framework/FindMyBase`       | Find My anti-spoof                                            |
+| `PrivateFrameworks/AirPlaySupport.framework/...`          | AirPlay receiver gate                                         |
+| `PrivateFrameworks/TrialServer.framework/TrialServer`     | A/B / trial-rollout exclude-VM gate                           |
+| `PrivateFrameworks/VisionKitCore.framework/VisionKitCore` | VisionKit                                                     |
+| `PrivateFrameworks/DVTInstrumentsUtilities.framework/...` | Xcode Instruments support                                     |
+| `PrivateFrameworks/WatchdogServiceManagement.framework/...` | Watchdog manager                                            |
+| `Frameworks/CoreVideo.framework/CoreVideo`                | CoreVideo pipeline                                            |
+
+**Standalone-binary patches (6 files, applied to the device rootfs
+over SSH)**
+
+| Path                                                                                              | Role                                                          |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `/System/Library/DataClassMigrators/MobileActivationMigrator.migrator/MobileActivationMigrator`   | Activation migration helper                                   |
+| `/Applications/CheckerBoard.app/CheckerBoard`                                                     | Apple internal accessibility test app                         |
+| `/Applications/StoreKitUISceneService.app/StoreKitUISceneService`                                 | StoreKit UI host                                              |
+| `/System/Library/Frameworks/StoreKit.framework/Support/storekitd`                                 | StoreKit / IAP daemon                                         |
+| `/System/Library/PrivateFrameworks/AppStoreDaemon.framework/Support/appstored`                    | App Store daemon                                              |
+| `/System/Library/PrivateFrameworks/CorePrescription.framework/XPCServices/CorePrescriptionService.xpc/CorePrescriptionService` | CorePrescription XPC service       |
+
+**Explicitly NOT patched (compute / accel — patching here turns off
+VM fast-paths that exist so the lib doesn't try to touch real silicon
+ANE / AGX / hardware codecs):**
+
+```
+System/Library/Frameworks/CoreML.framework/CoreML
+System/Library/PrivateFrameworks/Espresso.framework/Espresso
+System/Library/PrivateFrameworks/AppleNeuralEngine.framework/AppleNeuralEngine
+System/Library/PrivateFrameworks/CoreRE.framework/CoreRE
+System/Library/PrivateFrameworks/RenderBox.framework/RenderBox
+System/Library/PrivateFrameworks/WebGPU.framework/WebGPU
+System/Library/PrivateFrameworks/caulk.framework/caulk
+System/Library/PrivateFrameworks/IOSurfaceAccelerator.framework/IOSurfaceAccelerator
+System/Library/ExtensionKit/Extensions/HostInferenceProviderService.appex/HostInferenceProviderService
+```
+
+**Wiring**
+
+* `scripts/patchers/cfw_patch_hv_vmm.py` — standalone cstring patcher
+  (used for the on-device files): finds the `"kern.hv_vmm_present\0"`
+  cstring in the Mach-O's __cstring section and rewrites its first
+  byte (`'k'` → `'X'`).
+* `scripts/patchers/cfw_dsc_chunks.py` — chunked-DSC byte-level helper
+  (`DSCChunks(chunks_dir)`): vmaddr↔chunk-fileoff mapping, cstring
+  scan over executable mappings, byte read/write at a vmaddr, and
+  Mach-O header walk-back to resolve a vmaddr to the dylib install
+  name (LC_ID_DYLIB).
+* `scripts/patchers/cfw_patch_hv_vmm_dsc.py` — DSC-native orchestrator.
+  No external `ipsw` dependency. For every `"kern.hv_vmm_present\0"`
+  occurrence in any executable mapping, walks back to the containing
+  dylib's Mach-O header, reads `LC_ID_DYLIB`, and — if the install
+  name is in the explicit `PATCH_INSTALL_NAMES` whitelist — rewrites
+  the first byte of the cstring through `DSCChunks.write_at_vma`.
+  Pure Python. Whitelist-based by design so an operator can comment
+  out individual entries to bisect.
+* `scripts/patchers/cfw.py patch-hv-vmm <binary>` —
+  standalone-Mach-O subcommand (used for the 6 on-device files).
+* `scripts/patchers/cfw.py patch-hv-vmm-dsc <chunks_dir>` —
+  DSC subcommand (used while the SystemOS Cryptex DMG is still
+  mounted on the host, before the device copy).
+* `scripts/patch_hv_vmm_userland.sh` — thin wrapper used by the
+  install scripts.
+* `scripts/cfw_install_exp.sh` — EXP install script. Pre-step before
+  invoking `cfw_install.sh`: decrypts the SysOS Cryptex into the cache
+  location `cfw_install.sh` already uses, mounts it, applies the
+  DSC patch, unmounts. The unmodified `cfw_install.sh` then sees the
+  cached (already-patched) DMG. Standalone watchdogd is patched later
+  via SSH at step `[EXP-JB-3.5]`.
+* `scripts/cfw_install_jb.sh` and `scripts/cfw_install_dev.sh` —
+  unchanged from pre-experimental baseline. Neither runs the DSC
+  patcher.
+
+### `kern.hv_vmm_present` kernel patcher — Part A + Part B (EXP only)
+
+The `KernelEXPPatchHvVmmRename` Swift patcher (in `KernelEXPPatcher.findAll()`,
+chained after `KernelPatcher` and `KernelJBPatcher` for the `.exp` variant only)
+renames the sysctl OID and rewrites every kernel-internal occurrence of the
+old name so kexts continue to find it under the new name. Two parts. JB and
+other variants do NOT run this patcher.
+
+**Part A — OID name rename.** Finds the OID's `oid_name` cstring as
+the NUL-delimited bytes `\0hv_vmm_present\0` (exactly one match
+required in the kernelcache; on iPhone17,3 / iOS 26.1 this lives at
+file offset `0x964e0` inside `com.apple.kernel`). Flips byte 0 of the
+cstring `'h'` (0x68) → `'X'` (0x58). After the patch, the kernel's
+`sysctl_register_oid` keeps the OID's MIB and value (1) intact but
+the name resolver returns `ENOENT` for `kern.hv_vmm_present` and
+returns 1 for `kern.Xv_vmm_present`.
+
+**Part B — kernel-internal caller mangle.** After Part A, any
+kernel-side `sysctlbyname("kern.hv_vmm_present", …)` call gets
+ENOENT and falls into the caller's "not in a VM" branch — which on
+the bring-up build caused AMFI to panic with `AMFI: No PMGR?
+(ConfigurationSettings.cpp:388)` during ramdisk boot. Part B mangles
+every kernel-internal occurrence of the `kern.hv_vmm_present` name
+so callers continue to find the renamed OID. The mangle flips byte
+5 of the inner cstring (`'h'` after `kern.`) → `'X'`, producing
+`kern.Xv_vmm_present`.
+
+Two byte-aligned forms are searched, both anchored at the
+`kern.hv_vmm_present` substring:
+
+| Form | Needle | Where it lives | Mangle delta within needle |
+|------|--------|----------------|----------------------------|
+| (i) NUL-delimited cstring | `\0kern.hv_vmm_present\0` | `__TEXT,__cstring` of any kext that calls sysctlbyname by full name | +6 (skip leading NUL + 5) |
+| (ii) Sandbox-profile name token | `kern.hv_vmm_present\x0f` | Inside a compiled sandbox-profile blob within `com.apple.security.sandbox`. The `\x0f` byte is the sandbox-profile end-of-name marker; the token has no leading NUL. | +5 |
+
+On iPhone17,3 / iOS 26.1 / 23B85 the universe is 5 occurrences
+(verified by raw substring scan over the kernelcache buffer):
+
+| File offset | Fileset entry | Form |
+|-------------|---------------|------|
+| `0x541d56` | `com.apple.driver.AppleMobileFileIntegrity` | (i) cstring |
+| `0x81bdc3` | `com.apple.iokit.IOCryptoAcceleratorFamily` | (i) cstring |
+| `0xa6618b` | `com.apple.security.sandbox` | (ii) sandbox-profile name token |
+| `0xbb0d55` | `com.apple.security.sandbox` | (i) cstring |
+| `0xbce1f9` | `com.apple.filesystems.apfs` | (i) cstring |
+
+Part B emits one patch record per match (5 total, plus Part A's 1)
+under patch IDs `kernelcache_exp.hv_vmm_internal_caller_mangle` and
+`kernelcache_exp.hv_vmm_oid_rename`. Idempotent: a re-run detects
+already-mangled bytes (`kern.Xv_vmm_present` instead of
+`kern.hv_vmm_present`) and reports the patch as already applied.
+
+**Note on the sandbox-profile occurrence.** This was missed by the
+original Part B because its needle required NUL on both sides. The
+sandbox-profile blob stores OID names as TLV-framed tokens where the
+trailing byte is `\x0f` (sandbox EOT) rather than a NUL. Without the
+second needle, sandboxed callers that interpret the profile's
+`kern.hv_vmm_present`-matching rule would still match against the
+OLD name, while the OID itself has been renamed — so the rule's
+ALLOW/DENY/audit action would never fire. With the second needle,
+the rule's name token is rewritten to `kern.Xv_vmm_present` and
+sandboxed callers that hit the renamed OID match the (rewritten)
+rule as intended. Covered occurrence verified on
+iPhone17,3 / iOS 26.1 / 23B85 at file offset `0xa6618b`.
+
+### `watchdogd` surgical hv_vmm_present cache patch (EXP only)
+
+**Why a dedicated patch.** After the EXP kernel-side OID rename
+(`KernelEXPPatchHvVmmRename`), `sysctlbyname("kern.hv_vmm_present", ...)`
+returns `ENOENT` on this image. `/usr/libexec/watchdogd` caches that
+answer at startup. On `ENOENT` the cached byte stays at its BSS-zero
+default (`0`) and the downstream `cbz w0, ...` at the IOWatchdog-lookup
+site (`+0x58e0`) takes a branch into a `_os_crash` wrapper that does
+`brk #1`. launchd's `_PanicOnCrash → PanicOnConsecutiveCrash = true`
+flag in `com.apple.watchdogd.plist` escalates the SIGTRAP to a kernel
+panic. The cstring-mangle approach used elsewhere doesn't apply here
+because we want this binary to behave as if the sysctl returned `1`,
+not as if it returned `ENOENT`.
+
+**Patch shape.** Two-instruction surgical edit at every site in
+watchdogd that has the canonical caching shape:
+
+```
+adrp x0, <page>
+add  x0, x0, #<off>          ; "kern.hv_vmm_present"
+...arg setup...
+bl   _sysctlbyname
+cbnz w0, <skip>              ; <-- patched: NOP
+ldur w8, [x29, #-4]
+cmp  w8, #0
+cset wN, ne                  ; <-- patched: mov wN, #1
+adrp xM, <page>
+strb wN, [xM, #<imm>]        ; cached "am I a VM?" byte
+```
+
+Net effect: the cached byte is forced to `1` regardless of the sysctl
+result, and watchdogd's pre-existing "detected virtual machine
+environment, exiting..." clean-exit branch runs instead of the trap
+path. Two functions in watchdogd match this shape on
+`iPhone17,3 / iOS 26.1`; both are patched.
+
+**Code signing.** The byte edit invalidates the SHA-256 slot hashes
+for the 4 KiB pages containing the modifications in watchdogd's own
+`CS_CodeDirectory`. The patcher recomputes those slot hashes in place
+via `cfw_macho_codesign.reattest_modified_offsets` (4 KiB page size
+read from the CD, correct tail-slot length, all present CDs). The
+resulting CD mutation also changes the cdHash, but the existing JB
+kernel patch `patch_amfi_cdhash_in_trustcache` accepts any cdHash, so
+AMFI's trust-cache check still passes at execve. The patcher does NOT
+re-sign with `ldid` — preserving the original Apple-issued code-signing
+identifier (`com.apple.watchdogd`) is required for launchd's boot-task
+identity validation; an earlier attempt to re-sign other rootfs
+binaries with `ldid_sign` tripped this check on `mobile_obliterator`.
+
+**Wiring.**
+
+* `scripts/patchers/cfw_macho_codesign.py` — standalone-Mach-O
+  page-hash re-attestation (parallel to `cfw_dsc_codesign.py` but
+  parses `LC_CODE_SIGNATURE` directly, uses page size from the CD
+  header, handles short tail slot, updates every present CD).
+* `scripts/patchers/cfw_patch_watchdogd.py` — capstone-anchored
+  pattern matcher + Keystone-assembled 2-insn patch + slot reattest.
+  Idempotent.
+* `scripts/patchers/cfw.py patch-watchdogd <binary>` — CLI subcommand.
+* `scripts/patch_hv_vmm_userland.sh watchdogd <binary>` — thin shim
+  used by the install script.
+* `scripts/cfw_install_exp.sh` — invokes the patcher at step `[EXP-JB-3.5]`
+  on the live `/mnt1/usr/libexec/watchdogd` (scp-down, patch, scp-up,
+  chmod 0755). JB and DEV install scripts do NOT run this step.
+
+### DeviceTree identity properties at fw_patch time (EXP only)
+
+`DeviceTreePatcher` carries two property-patch lists: `basePropertyPatches`
+(4 entries — `serial-number`, `home-button-type`, `artwork-device-subtype`,
+`island-notch-location`) applied for every variant, and
+`identityPropertyPatches` (8 entries) applied **only when `includeIdentityPatches`
+is true**, which `FirmwarePipeline` sets exactly when `variant == .exp`.
+
+The 8 EXP-only identity properties (no restore-fatal ones — those go through
+EXP-JB-6 post-restore):
+
+| # | Node path                                          | Property              | Old → New                     | Risk    |
+|---|----------------------------------------------------|-----------------------|-------------------------------|---------|
+| 1 | `device-tree`                                      | `target-sub-type`     | `VPHONE600AP` → `D47AP`       | HIGHER  |
+| 2 | `device-tree`                                      | `compatible[1]`       | `iPhone99,11` → `iPhone17,3` (slot-preserving) | LOW |
+| 3 | `device-tree/product`                              | `fdr-product-type`    | `iPhone99,11` → `iPhone17,3`  | HIGHER  |
+| 4 | `device-tree/product`                              | `sub-product-type`    | `iPhone99,11` → `iPhone17,3`  | LOW     |
+| 5 | `device-tree/product`                              | `unique-model`        | `VPHONE600AP` → `D47AP`       | LOW     |
+| 6 | `device-tree/arm-io`                               | `device_type`         | `vresearch1-io` → `t8140-io`  | MEDIUM  |
+| 7 | `device-tree/arm-io`                               | `soc-generation`      | `VResearch1` → `H17`          | MEDIUM-LOW |
+| 8 | `device-tree/product/vphone600-gestalt-variants`   | `name` (node rename)  | `vphone600-gestalt-variants` → `d47-gestalt-variants` | LOW-MEDIUM |
+
+Root `model` and root `target-type` are deliberately NOT in this list —
+both have been empirically shown to break restore. Those edits run
+post-restore as EXP-JB-6.
+
+### Post-restore DT identity rewrite (EXP-JB-6, EXP only)
+
+After the restore daemon's BuildManifest identity check has passed,
+`cfw_install_exp.sh` step `[EXP-JB-6]` scp's `devicetree.img4` down from the
+mounted rootfs (`/mnt5/<boot-hash>/usr/standalone/firmware/`), runs
+`scripts/patchers/cfw_patch_post_restore_dt.py`, and scp's the rewritten
+img4 back. The Python patcher unwraps the IM4P via `pyimg4`, parses the
+DT flat-binary, rewrites three restore-fatal root properties, and repacks
+preserving the IMG4's original IM4M ticket. The iBSS/iBEC/LLB
+`image4_validate_property_callback` bypass (existing JB patch) accepts
+the modified payload at next boot.
+
+| # | Property         | Old → New                                                              |
+|---|------------------|------------------------------------------------------------------------|
+| 1 | root `model`       | `iPhone99,11` → `iPhone17,3`                                          |
+| 2 | root `target-type` | `VPHONE600` → `D47`                                                   |
+| 3 | root `compatible`  | reorder `["VPHONE600AP", "iPhone99,11", "AVP-ARM"]` → `["D47AP", "VPHONE600AP", "AVP-ARM"]` (keeps `VPHONE600AP` in second slot so IOKit's `AppleVMApple1IO` kext binding still resolves; userland reads only the first entry for `hw.model`) |
+
+Idempotent. Skipped if already-rewritten DT is detected.
+
+### SystemVersion.plist `ProductBuildVersion` rewrite (EXP-JB-7, EXP only, opt-in)
+
+Gated on the `SPOOF_BUILD` env var. When `cfw_install_exp.sh` is invoked
+with e.g. `SPOOF_BUILD=23F77`, step `[EXP-JB-7]` runs
+`scripts/patchers/cfw_patch_build_version.py` (plistlib-based,
+format-preserving) on both the rootfs and cryptex copies of
+`SystemVersion.plist` to rewrite the `ProductBuildVersion` key to the
+specified id. Without `SPOOF_BUILD`, the step is skipped and the build
+version stays at the original IPSW value.
+
+| File                                                                              | Touched if `SPOOF_BUILD=<id>` |
+|-----------------------------------------------------------------------------------|:------------------------------:|
+| `/mnt1/System/Library/CoreServices/SystemVersion.plist` (rootfs)                  | Y                              |
+| `/mnt5/Cryptexes/OS/System/Library/CoreServices/SystemVersion.plist` (cryptex)    | Y                              |
+
+`kern.osversion` is unaffected — that comes from a kernel global
+initialized from boot args, not from this plist. Userland MG cache
+picks up the new build identifier on first boot after the gestalt
+cache rebuild.
+
 ### CFW Installer Flow Matrix (Script-Level)
 
-| Flow Item                                     | Regular (`cfw_install.sh`)      | Dev (`cfw_install_dev.sh`) | JB (`cfw_install_jb.sh`)                      |
-| --------------------------------------------- | ------------------------------- | -------------------------- | --------------------------------------------- |
-| Base CFW phases (1/7 -> 7/7)                  | Runs directly                   | Runs directly              | Runs via `CFW_SKIP_HALT=1 zsh cfw_install.sh` |
-| Dev overlay (`rpcserver_ios` replacement)     | -                               | Y (`apply_dev_overlay`)    | -                                             |
-| SSH readiness wait before install             | Y (`wait_for_device_ssh_ready`) | -                          | Y (inherited from base run)                   |
-| launchd jetsam patch (`patch-launchd-jetsam`) | -                               | Y (base-flow injection)    | Y (JB-1)                                      |
-| launchd dylib injection (`inject-dylib /b`)   | -                               | -                          | Y (JB-1)                                      |
-
-| Procursus bootstrap deployment | - | - | Y (JB-2) |
-| BaseBin hook deployment (`*.dylib` -> `/mnt1/cores`) | - | - | Y (JB-3) |
-| First-boot JB finalization (`vphone_jb_setup.sh`) | - | - | Y (post-boot; now fails before done marker if TrollStore Lite install does not complete) |
-| Additional input resources | `cfw_input` | `cfw_input` + `resources/cfw_dev/rpcserver_ios` | `cfw_input` + `cfw_jb_input` |
-| Extra tool requirement beyond base | - | - | `zstd` |
-| Halt behavior | Halts unless `CFW_SKIP_HALT=1` | Halts unless `CFW_SKIP_HALT=1` | Always halts after JB phases |
+| Flow Item                                     | Regular (`cfw_install.sh`)      | Dev (`cfw_install_dev.sh`) | JB (`cfw_install_jb.sh`)                      | EXP (`cfw_install_exp.sh`)                            |
+| --------------------------------------------- | ------------------------------- | -------------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| Base CFW phases (1/7 -> 7/7)                  | Runs directly                   | Runs directly              | Runs via `CFW_SKIP_HALT=1 zsh cfw_install.sh` | Runs via `CFW_SKIP_HALT=1 zsh cfw_install.sh`         |
+| Dev overlay (`rpcserver_ios` replacement)     | -                               | Y (`apply_dev_overlay`)    | -                                             | -                                                     |
+| SSH readiness wait before install             | Y (`wait_for_device_ssh_ready`) | -                          | Y (inherited from base run)                   | Y (inherited from base run)                           |
+| launchd jetsam patch (`patch-launchd-jetsam`) | -                               | Y (base-flow injection)    | Y (JB-1)                                      | Y (JB-1)                                              |
+| launchd dylib injection (`inject-dylib /b`)   | -                               | -                          | Y (JB-1)                                      | Y (JB-1)                                              |
+| Procursus bootstrap deployment                | -                               | -                          | Y (JB-2)                                      | Y (JB-2)                                              |
+| BaseBin hook deployment (`*.dylib` -> `/mnt1/cores`) | -                        | -                          | Y (JB-3)                                      | Y (JB-3)                                              |
+| First-boot JB finalization (`vphone_jb_setup.sh`) | -                           | -                          | Y (post-boot)                                 | Y (post-boot)                                         |
+| DSC pre-patch (`kern.hv_vmm_present` byte-5 mangle + slot reattest) | -         | -                          | -                                             | Y (pre-step, before base CFW)                         |
+| `watchdogd` surgical 2-insn patch + slot reattest | -                           | -                          | -                                             | Y (EXP-JB-3.5)                                        |
+| Post-restore DT identity rewrite (`devicetree.img4`)| -                         | -                          | -                                             | Y (EXP-JB-6)                                          |
+| `SystemVersion.plist` `ProductBuildVersion` rewrite | -                         | -                          | -                                             | Y (EXP-JB-7, opt-in via `SPOOF_BUILD`)                |
+| Additional input resources                    | `cfw_input`                     | `cfw_input` + `resources/cfw_dev/rpcserver_ios` | `cfw_input` + `cfw_jb_input` | `cfw_input` + `cfw_jb_input`        |
+| Extra tool requirement beyond base            | -                               | -                          | `zstd`                                        | `zstd`                                                |
+| Halt behavior                                 | Halts unless `CFW_SKIP_HALT=1`  | Halts unless `CFW_SKIP_HALT=1` | Always halts after JB phases              | Always halts after EXP phases                         |
 
 ## Summary
 
-| Component                | Regular | Dev |  JB |
-| ------------------------ | ------: | --: | --: |
-| AVPBooter                |       1 |   1 |   1 |
-| iBSS                     |       2 |   2 |   3 |
-| iBEC                     |       3 |   3 |   3 |
-| LLB                      |       6 |   6 |   6 |
-| TXM                      |       1 |  12 |  12 |
-| Kernel (base)            |      28 |  29 |  28 |
-| Kernel (JB methods)      |       - |   - |  59 |
-| Boot chain total         |      41 |  53 | 112 |
-| CFW binary patches       |       4 |   5 |   6 |
-| CFW installed components |       6 |   7 |   9 |
-| CFW total                |      10 |  12 |  15 |
-| Grand total              |      51 |  65 | 127 |
+| Component                          | Regular | Dev |  JB | EXP |
+| ---------------------------------- | ------: | --: | --: | --: |
+| AVPBooter                          |       1 |   1 |   1 |   1 |
+| iBSS                               |       2 |   2 |   3 |   3 |
+| iBEC                               |       3 |   3 |   3 |   3 |
+| LLB                                |       6 |   6 |   6 |   6 |
+| TXM                                |       1 |  12 |  12 |  12 |
+| Kernel (base)                      |      28 |  29 |  28 |  28 |
+| Kernel (JB methods)                |       - |   - |  59 |  59 |
+| Kernel (EXP methods, `hv_vmm`)     |       - |   - |   - |   6 |
+| DeviceTree base properties         |       4 |   4 |   4 |   4 |
+| DeviceTree EXP identity properties |       - |   - |   - |   8 |
+| Boot chain total                   |      45 |  57 | 116 | 130 |
+| CFW binary patches (base)          |       4 |   5 |   6 |   6 |
+| CFW EXP-only steps                 |       - |   - |   - |   4 (DSC pre-patch, watchdogd EXP-JB-3.5, post-restore DT EXP-JB-6, build-version EXP-JB-7 opt-in) |
+| CFW installed components           |       6 |   7 |   9 |   9 |
+| CFW total                          |      10 |  12 |  15 |  19 |
+| Grand total                        |      55 |  69 | 131 | 149 |
 
 ## Ramdisk Variant Matrix
 
-| Variant       | Pre-step            | `Ramdisk/txm.img4`               | `Ramdisk/krnl.ramdisk.img4`                                                      | `Ramdisk/krnl.img4`                       | Effective kernel used by `ramdisk_send.sh`          |
-| ------------- | ------------------- | -------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------- |
-| `RAMDISK`     | `make fw_patch`     | release TXM + base TXM patch (1) | base kernel (28), legacy `*.ramdisk` preferred else derive from pristine CloudOS | restore kernel from `fw_patch` (28)       | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
-| `DEV+RAMDISK` | `make fw_patch_dev` | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_dev` (29)   | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
-| `JB+RAMDISK`  | `make fw_patch_jb`  | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_jb` (28+59) | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| Variant        | Pre-step             | `Ramdisk/txm.img4`               | `Ramdisk/krnl.ramdisk.img4`                                                      | `Ramdisk/krnl.img4`                            | Effective kernel used by `ramdisk_send.sh`          |
+| -------------- | -------------------- | -------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| `RAMDISK`      | `make fw_patch`      | release TXM + base TXM patch (1) | base kernel (28), legacy `*.ramdisk` preferred else derive from pristine CloudOS | restore kernel from `fw_patch` (28)            | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `DEV+RAMDISK`  | `make fw_patch_dev`  | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_dev` (29)        | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `JB+RAMDISK`   | `make fw_patch_jb`   | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_jb` (28+59)      | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
+| `EXP+RAMDISK`  | `make fw_patch_exp`  | release TXM + base TXM patch (1) | base kernel (28), same derivation rule                                           | restore kernel from `fw_patch_exp` (28+59+6)   | `krnl.ramdisk.img4` preferred, fallback `krnl.img4` |
 
 ## Cross-Version Dynamic Snapshot
 

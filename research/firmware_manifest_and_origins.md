@@ -318,3 +318,257 @@ The firmware is a PCC shell wrapping an iPhone core. The vresearch101 boot chain
 handles DFU/TSS signing. The vphone600 device tree + SEP + kernel provide the
 runtime environment. The iPhone userland is patched post-install for activation
 bypass, jailbreak tools, and persistent SSH/VNC.
+
+---
+
+## 9. DeviceTree identity rewrite
+
+The vphone600ap DT carries 13 properties whose values contain the literals
+`vphone600` / `VPHONE600` / `iPhone99,11` / `vmapple` / `vresearch`. Most are
+load-bearing (kernel kext-matching, restore-time identity, IORegistry path
+structure) and cannot be rewritten without breaking boot or restore.
+`DeviceTreePatcher` rewrites the 8 that are either userland-facing identity
+fields or SoC-generation descriptors with non-binding semantics.
+
+| #  | Path                                                 | Property             | Original                                                  | Patched                                                  | Slot | Risk          |
+|----|------------------------------------------------------|----------------------|-----------------------------------------------------------|----------------------------------------------------------|------|---------------|
+| 2  | `device-tree`                                        | `target-sub-type`    | `"VPHONE600AP"`                                           | `"D47AP"`                                                | 12   | HIGHER        |
+| 3  | `device-tree`                                        | `compatible[1]`      | secondary `"iPhone99,11"` (multi-string)                  | `"iPhone17,3"` (multi-string, primary `"VPHONE600AP"` preserved) | 48 | LOW |
+| 10 | `device-tree/product`                                | `fdr-product-type`   | `"iPhone99,11"`                                           | `"iPhone17,3"`                                           | 12   | HIGHER        |
+| 11 | `device-tree/product`                                | `sub-product-type`   | `"iPhone99,11"`                                           | `"iPhone17,3"`                                           | 12   | LOW           |
+| 12 | `device-tree/product`                                | `unique-model`       | `"VPHONE600AP"`                                           | `"D47AP"`                                                | 12   | LOW           |
+| 6  | `device-tree/arm-io`                                 | `device_type`        | `"vresearch1-io"`                                         | `"t8140-io"` (matches d47ap)                             | 14   | MEDIUM        |
+| 7  | `device-tree/arm-io`                                 | `soc-generation`     | `"VResearch1"`                                            | `"H17"` (matches d47ap)                                  | 11   | MEDIUM-LOW    |
+| 13 | `device-tree/product/vphone600-gestalt-variants`     | `name` (node name)   | `"vphone600-gestalt-variants"`                            | `"d47-gestalt-variants"`                                 | 27   | LOW-MEDIUM    |
+
+**Properties intentionally left at vphone600 values** (with the empirical
+reason for each):
+
+- `device-tree.target-type` (`"VPHONE600"`) — Tier 2 attempt broke restore;
+  iBoot / restored_external read this and reject the device when the value
+  doesn't match the BuildManifest's signed identity.
+- `device-tree.model` (`"iPhone99,11"`) — Tier 1 attempt broke restore;
+  same reason as `target-type`.
+- `device-tree.compatible[0]` (`"VPHONE600AP"`) — IOKit's platform-expert
+  matching at boot binds against the FIRST entry of `compatible`. Rewriting
+  it to `D47AP` forces `_PE_init_platform_expert` to look for a D47AP-claiming
+  kext, which doesn't exist in our kernelcache. Panic guaranteed.
+- `device-tree/arm-io.compatible` / `device_type` / `soc-generation`
+  (vmapple1 / vresearch1-io / VResearch1) — bind the vmapple1 IO controller
+  kext, GIC, and PCIe drivers. Rename → no kext claims the SoC IO → boot
+  panic.
+- `device-tree/arm-io/gic.compatible`, `device-tree/arm-io/pcie.compatible` —
+  same family as arm-io entries.
+- `device-tree/product/vphone600-gestalt-variants` (node name) — referenced
+  by libMobileGestalt-equivalent code that looks up the subtree by literal
+  node name. Rename breaks the lookup.
+
+**Compatible multi-string surgical rewrite** (#3). The original blob is:
+
+```
+[0..10]  "VPHONE600AP"       (11 bytes)
+[11]     NUL
+[12..22] "iPhone99,11"       (11 bytes)
+[23]     NUL
+[24..46] "AppleVirtualPlatformARM" (23 bytes)
+[47]     NUL
+```
+
+Patched (slot length preserved at 48):
+
+```
+[0..10]  "VPHONE600AP"        ← unchanged: platform-expert bind site
+[11]     NUL
+[12..21] "iPhone17,3"
+[22]     NUL
+[23..45] "AppleVirtualPlatformARM"
+[46]     NUL
+[47]     NUL (pad)
+```
+
+`AppleVirtualPlatformARM` shifts 1 byte earlier but every consumer walks
+the blob by NUL-terminators, none depend on a fixed byte offset within
+the property. IOKit's platform-expert match against `VPHONE600AP` (first
+entry) is unaffected; the second entry, which userland walks of the
+compatible[] list see when enumerating identifiers, now reports
+`iPhone17,3`.
+
+**Risk classification.**
+
+- **LOW** (#3, #11, #12) — read only by userland identity APIs
+  (libMobileGestalt, IORegistry queries, App Store device class).
+  No iBoot / restored_external / TSS dependency.
+- **HIGHER** (#2, #10) — `target-sub-type` is in the same restore-signed
+  family as `target-type` (already proven to break restore);
+  `fdr-product-type` is read by Factory-Data-Restore code paths that may
+  check it against the BuildManifest. If restore fails after a build that
+  enables these, remove them first and try the remaining LOW-risk three
+  in isolation.
+
+Wiring: all 5 patches are declared in
+`sources/FirmwarePatcher/DeviceTree/DeviceTreePatcher.swift` under
+`propertyPatches`. The serializer rebuilds the entire tree on every run,
+so each new value is written at the same slot length as the original.
+The `compatible` patch uses a new `PropertyValue.bytes(Data)` case that
+takes a pre-built byte blob (necessary because the multi-string layout
+contains embedded NULs).
+
+## 10. Post-restore DT identity rewrite (EXP-JB-6)
+
+The properties under "known-bad from prior rounds" (root `model`, root
+`target-type`) cannot be edited at fw_patch time because
+`restored_external` / iBoot's restore mode cross-checks them against the
+BuildManifest's signed `SupportedProductTypes`. But that cross-check
+fires **only during installation**. After restore completes, the boot
+path is
+
+```
+AVPBooter (patched)
+   → iBSS / iBEC (image4_validate_property_callback bypass patches)
+   → LLB (image4 bypass + rootfs bypass patches)
+   → iBoot (research) → DT loaded from disk
+   → kernel → sysctls populated from DT
+```
+
+The image4 bypass patches we already ship are what allow every
+fw_patch-time IM4P modification to boot at all — they make the IM4M's
+stored digest irrelevant on subsequent boots. So an additional IM4P
+modification applied **after** restore completes is in-policy with the
+project's existing trust-chain bypass.
+
+The **EXP-JB-6** install step exploits this (in `cfw_install_exp.sh`
+only — JB and DEV variants do NOT run it). While the install pipeline
+still has `/mnt5` (the preboot volume) mounted in ramdisk mode, it:
+
+1. Pulls `/mnt5/<boot-hash>/usr/standalone/firmware/devicetree.img4` to
+   the host.
+2. Runs `scripts/patchers/cfw_patch_post_restore_dt.py`, which:
+   - Unwraps img4 → IM4P → decompresses LZFSE → DT blob (via pyimg4).
+   - Applies the three restore-unsafe edits (table below).
+   - Re-compresses LZFSE → repacks IM4P → repacks IMG4 with the original
+     IM4M.
+3. Pushes the modified img4 back to the same path.
+4. The device reboots out of ramdisk; iBoot loads the modified DT;
+   kernel populates `machine_info` from the new property values.
+
+| Property                  | Before (post-Tier-1b state on disk)                                       | After (EXP-JB-6 rewrites to)                                            | Slot |
+|---------------------------|---------------------------------------------------------------------------|-------------------------------------------------------------------------|------|
+| `device-tree.model`       | `"iPhone99,11"`                                                           | `"iPhone17,3"`                                                          | 12   |
+| `device-tree.target-type` | `"VPHONE600"`                                                             | `"D47"`                                                                 | 10   |
+| `device-tree.compatible`  | `["VPHONE600AP", "iPhone17,3", "AppleVirtualPlatformARM"]` (post-Tier-1b) | `["D47AP", "VPHONE600AP", "AppleVirtualPlatformARM"]` (reordered)       | 48   |
+
+The `compatible` rewrite is a **reorder**, not a replacement: VPHONE600AP
+stays in the list (now as the second entry), so IOKit's platform-expert
+match against the AppleVMApple1IO kext still binds. `compatible[0]`
+becomes D47AP, which is what userland's `hw.model` resolves to.
+
+Userland-visible effects after the next boot:
+
+- `sysctl hw.machine` → `"iPhone17,3"` (was `"iPhone99,11"`)
+- `sysctl hw.product` → `"iPhone17,3"` (was `"iPhone99,11"`)
+- `sysctl hw.model`   → `"D47AP"`      (was `"VPHONE600AP"`)
+- Settings → General → About → Model Identifier reflects the new
+  ProductType.
+- Every `MGCopyAnswer` key backed by `IOPlatformExpertDevice` properties
+  picks up the new values.
+
+Idempotence: the patcher reads the existing DT, applies edits, and
+writes back only if there's a difference. A second run on an
+already-patched devicetree.img4 detects target-state-already-met and
+exits without rewriting.
+
+Wiring:
+
+* `scripts/patchers/cfw_patch_post_restore_dt.py` — host-side patcher.
+  Uses pyimg4 for img4↔IM4P+LZFSE round-trip; mirrors the DT format
+  parser/serializer from `DeviceTreePatcher.swift`.
+* `scripts/cfw_install_exp.sh [EXP-JB-6]` — install step that runs after
+  JB-5 (LaunchDaemon deploy) and before the CLEANUP/umount block, in the
+  EXP install script only. Discovers the boot-manifest-hash via the same
+  `get_boot_manifest_hash` helper used by earlier install steps. Tolerates
+  a missing devicetree.img4 with warn-and-skip rather than aborting the
+  install. JB and DEV install scripts do NOT carry this step.
+
+Why this is restore-safe (and the fw_patch-time version was not):
+
+- **fw_patch-time path** modifies the IM4P bytes that are sent during
+  restore. iBoot's restore mode reads each IM4P and (via the image4
+  validation callback the iBSS/iBEC/LLB patches already neuter) accepts
+  its digest mismatch — but some other path inside `restored_external`
+  enforces the top-level `SupportedProductTypes` check independently and
+  rejects DT.model values that don't appear in that list.
+- **EXP-JB-6 post-restore path** never re-runs the BuildManifest check.
+  Subsequent boots validate IM4P contents against the IM4M only — which
+  the image4 bypass patches already wave through. So the same byte
+  change that's fatal at restore is harmless after restore.
+
+## 11. Build-version rewrite (EXP-JB-7, opt-in)
+
+**Opt-in step**. EXP-JB-7 runs only when the `SPOOF_BUILD` environment
+variable is set — e.g. `make setup_machine EXP=1 SPOOF_BUILD=23F77`, or
+`make cfw_install_exp SPOOF_BUILD=23F77` if you're re-running just the
+CFW phase. When omitted/empty the step is skipped entirely and the
+build identifier stays at whatever the IPSW shipped. Only the EXP
+install script runs this step; JB and DEV variants are not affected.
+
+The iPhone IPSW we install from ships with build identifier `23B85` (iOS
+26.1). iOS displays this string in Settings → General → About → "Build"
+and exposes it through `MGCopyAnswer("BuildVersion")`, `CoreFoundation`'s
+`_CFCopyServerVersionDictionary`, App Store telemetry, and every other
+framework path that reads `/System/Library/CoreServices/SystemVersion.plist`.
+
+The build identifier lives in exactly two on-device plist files. Both
+are plain XML/binary plists (no Apple-side per-file signature), and
+both live on volumes that are writable at install time:
+
+| Path                                                                                | Volume       | Role                                                                 |
+|-------------------------------------------------------------------------------------|--------------|----------------------------------------------------------------------|
+| `/System/Library/CoreServices/SystemVersion.plist`                                  | rootfs       | The canonical source. Read by every userland identity API.           |
+| `/private/preboot/Cryptexes/OS/System/Library/CoreServices/SystemVersion.plist`     | preboot      | Cryptex-side copy. Read by Cryptex-aware OS-version queries.         |
+
+The **EXP-JB-7** install step rewrites the `ProductBuildVersion` key in both
+plists to a target value (currently `23F77`):
+
+```
+ProductBuildVersion: "23B85" → "23F77"
+```
+
+`ProductVersion` (`26.1`), `ProductName` (`iPhone OS`), `BuildID`,
+`SystemImageID`, and `ProductCopyright` are left untouched.
+
+Wiring:
+
+* `scripts/patchers/cfw_patch_build_version.py` — host-side plistlib-based
+  rewriter. Auto-detects XML vs binary plist format and preserves it on
+  write. Idempotent — a re-run on an already-patched plist exits without
+  rewriting.
+* `scripts/cfw_install_exp.sh [EXP-JB-7]` — install step that runs after
+  EXP-JB-6 (post-restore DT) and before CLEANUP, in the EXP install script
+  only. For each of the two plist paths it scp_from's the file to host,
+  runs the patcher with target `23F77`, scp_to's the file back. Tolerates
+  missing-on-device with warn+continue. JB and DEV install scripts do NOT
+  carry this step.
+
+What this **does not** flip:
+
+- `sysctl kern.osversion` — populated at boot from a kernel global
+  initialized from boot args, not from `SystemVersion.plist`. The kernel
+  image we ship was built against `23B78` (the PCC vphone600 /
+  vresearch101 build identifier; visible in 621 kext-Info.plist
+  embedded `DTPlatformBuild` / `DTSDKBuild` blobs inside the kernelcache
+  but never read by `kern.osversion` at runtime). To flip
+  `kern.osversion` we'd need to either rebuild the kernelcache with a
+  different `OS_BUILD_VERSION` or patch the kernel boot args path — out
+  of scope for this round.
+- `SystemVersionCompat.plist` — carries `23B34a` / `19.1`, a legacy
+  iOS-19 marker for `MacCatalyst`-style version queries. Not user-
+  visible, deliberately untouched.
+- DSC dylib internals — the apparent `23B85` byte sequence in DSC chunk
+  `.21` is a Swift mangled-name UUID-uniquing substring
+  (`_TtC11MediaCoreUIP33_98519F523B8515A67EEFBCB0824D82807Counter`), not
+  a build identifier. Patching it would corrupt a Swift symbol name.
+
+Order of operations: this step runs **after** EXP-JB-6 (the DT identity
+rewrite) so that any post-restore identity work targeting `/mnt5` has
+completed before we modify the Cryptex's SystemVersion.plist (which
+lives on the same volume).
