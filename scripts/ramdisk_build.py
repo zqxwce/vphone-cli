@@ -61,6 +61,7 @@ RAMDISK_REMOVE = [
     "usr/sbin/dietappleh16camerad",
     "usr/local/bin/wget",
     "usr/local/bin/procexp",
+    "usr/trollstore",
 ]
 
 # Directories to re-sign in ramdisk
@@ -556,7 +557,10 @@ def build_ramdisk(restore_dir, im4m_path, vm_dir, input_dir, output_dir, temp_di
         for rel_path in RAMDISK_REMOVE:
             full = os.path.join(mountpoint, rel_path)
             if os.path.exists(full):
-                os.remove(full)
+                if os.path.isdir(full):
+                    shutil.rmtree(full)
+                else:
+                    os.remove(full)
 
         # Re-sign Mach-O binaries
         print("  Re-signing Mach-O binaries...")
