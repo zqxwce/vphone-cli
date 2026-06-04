@@ -238,6 +238,11 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
 
         config.keyboards = [VZUSBKeyboardConfiguration()]
 
+        // Empty XHCI USB controller — live passthrough devices are attached
+        // at runtime from the USB menu via VPhoneUSBPassthrough.
+        config.usbControllers = [VZXHCIControllerConfiguration()]
+        print("[vphone] XHCI USB controller configured (empty, for live passthrough)")
+
         if !options.noVphoned {
             // Vsock (host <-> guest control channel, no IP/TCP involved)
             config.socketDevices = [VZVirtioSocketDeviceConfiguration()]

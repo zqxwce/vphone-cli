@@ -56,6 +56,13 @@ struct VPhoneBootCLI: ParsableCommand {
     @Flag(name: .customLong("no-vphoned"), help: "Exclude vphoned usage (patchless-only).")
     var noVphoned: Bool = false
 
+    @Option(
+        name: .customLong("usb-passthrough"),
+        parsing: .upToNextOption,
+        help: "Auto-attach host USB device(s) by locationID after boot (hex, e.g. 0x03120000). Repeatable."
+    )
+    var usbPassthrough: [String] = []
+
     /// DFU mode runs headless (no GUI).
     var noGraphics: Bool {
         dfu
