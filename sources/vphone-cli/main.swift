@@ -2,6 +2,9 @@ import AppKit
 import ArgumentParser
 import Foundation
 
+setbuf(stdout, nil)
+setbuf(stderr, nil)
+
 do {
     let command = try VPhoneCLI.parseAsRoot()
 

@@ -41,6 +41,9 @@ class VPhoneMenuController {
     var cameraSourceTestPatternItem: NSMenuItem?
     var cameraSourceVideoFileItem: NSMenuItem?
     var cameraStartStopItem: NSMenuItem?
+    var usbPassthrough: VPhoneUSBPassthrough?
+    var usbMenu: NSMenu?
+    var usbMenuDelegate: VPhoneUSBMenuDelegate?
     weak var captureView: VPhoneVirtualMachineView?
     var batterySyncEnabled = false
     var batterySyncStatusItem: NSMenuItem?
@@ -84,6 +87,7 @@ class VPhoneMenuController {
         mainMenu.addItem(buildKeysMenu())
         mainMenu.addItem(buildAppsMenu())
         mainMenu.addItem(buildRecordMenu())
+        mainMenu.addItem(buildUSBMenu())
 
         // Window menu — provides Cmd+W (close) and Cmd+M (minimize) for any key window
         let windowMenuItem = NSMenuItem()

@@ -150,6 +150,23 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             }
             let recorder = VPhoneScreenRecorder()
             mc.screenRecorder = recorder
+            let passthrough = VPhoneUSBPassthrough(vm: vm.virtualMachine)
+            mc.usbPassthrough = passthrough
+            for hex in cli.usbPassthrough {
+                let trimmed = hex.hasPrefix("0x") || hex.hasPrefix("0X") ? String(hex.dropFirst(2)) : hex
+                guard let loc = UInt32(trimmed, radix: 16) else {
+                    print("[usb] --usb-passthrough: cannot parse '\(hex)' as hex")
+                    continue
+                }
+                print("[usb] auto-attach requested for 0x\(String(loc, radix: 16))")
+                passthrough.attach(locationID: loc) { err in
+                    if let err {
+                        print("[usb] auto-attach 0x\(String(loc, radix: 16)) failed: \(err.localizedDescription)")
+                    } else {
+                        print("[usb] auto-attached 0x\(String(loc, radix: 16))")
+                    }
+                }
+            }
             menuController = mc
 
             let socketPath = options.configURL
