@@ -44,15 +44,34 @@ static NSString *TLExecutablePath(void) {
     return argv0 ?: @"";
 }
 
+// Daemons the loader is explicitly allowed to load tweaks into, even though
+// they're not under a `.app/` path. Keep this list narrow — every daemon
+// added here is a process where a buggy tweak can crash a launchd-managed
+// service and destabilize boot.
+//
+// This list ONLY applies to tweaks WITHOUT Filter.Frameworks. Framework-
+// filtered tweaks engage in every process and self-limit based on which
+// frameworks are actually loaded — they don't need per-daemon entries here.
+static NSString *const kVPhoneAllowedDaemonPaths[] = {
+    @"/usr/libexec/cameracaptured",  // libvcamcaptured (Filter.Executables match)
+};
+
 static BOOL TLShouldRunInCurrentProcess(void) {
     NSString *execPath = TLExecutablePath();
     if (!execPath.length) return NO;
 
     // vphone's hook runtime injects broadly, including launch-critical daemons
     // like xpcproxy, logd, notifyd, sshd, shells, and helper tools. Restrict the
-    // user tweak loader to app binaries only so it does not destabilize boot or
-    // process launch paths.
+    // user tweak loader to app binaries only — plus an allowlist of daemons
+    // that explicitly opt in (see `kVPhoneAllowedDaemonPaths`).
     if ([execPath containsString:@".app/"]) return YES;
+
+    for (size_t i = 0;
+         i < sizeof(kVPhoneAllowedDaemonPaths) /
+                 sizeof(kVPhoneAllowedDaemonPaths[0]);
+         i++) {
+        if ([execPath isEqualToString:kVPhoneAllowedDaemonPaths[i]]) return YES;
+    }
 
     return NO;
 }

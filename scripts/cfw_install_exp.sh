@@ -87,20 +87,43 @@ elif [[ ! -f "$JB_SYSOS_DMG" ]]; then
 fi
 
 if [[ -f "$JB_SYSOS_DMG" ]]; then
-    # Mount, patch chunks, unmount. Idempotent: re-running on an already
-    # patched DMG is a no-op (patcher detects already-patched form).
-    echo "[*] hv_vmm DSC patch: mounting cached SystemOS DMG..."
+    # Mount, patch chunks (hv_vmm + camera, same cryptex), unmount.
+    # Idempotent: re-running on an already-patched DMG is a no-op
+    # (hv_vmm patcher detects already-patched cstrings; camera patcher
+    # refuses pre-patched function entries unless --force is passed).
+    echo "[*] DSC patches: mounting cached SystemOS DMG..."
     mkdir -p "$JB_MNT_SYSOS"
     sudo hdiutil detach "$JB_MNT_SYSOS" -force 2>/dev/null || true
     sudo hdiutil attach -mountpoint "$JB_MNT_SYSOS" "$JB_SYSOS_DMG" -nobrowse -owners off
 
     JB_DSC_CHUNKS_DIR="$JB_MNT_SYSOS/System/Library/Caches/com.apple.dyld"
+    JB_DSC_HEADER="$JB_DSC_CHUNKS_DIR/dyld_shared_cache_arm64e"
     if [[ -d "$JB_DSC_CHUNKS_DIR" ]]; then
         echo "[*] hv_vmm DSC patch: patching chunks under $JB_DSC_CHUNKS_DIR..."
         "$SCRIPT_DIR/patch_hv_vmm_userland.sh" dsc "$JB_DSC_CHUNKS_DIR"
         echo "[+] hv_vmm DSC patch: chunks patched"
+
+        # Camera DSC patches make `cameracaptured` return a single
+        # synthetic `vphone-cam` device and stub out the AVFoundation
+        # init-time validation that would otherwise crash on it. With
+        # these + the /product/camera DT node (added at fw_patch time),
+        # Camera.app's icon shows on Home Screen and the app launches
+        # without immediately bailing. Patch #6 (the BL-site sanity
+        # check inside _captureSourceServer_handleCopySourcesMessage)
+        # is 26.5-build-specific; the patcher aborts cleanly on any
+        # other build, leaving hv_vmm's changes intact.
+        if [[ -f "$JB_DSC_HEADER" ]]; then
+            echo "[*] camera DSC patch: patching chunks under $JB_DSC_CHUNKS_DIR..."
+            if "$SCRIPT_DIR/patch_camera_userland.sh" dsc "$JB_DSC_CHUNKS_DIR" "$JB_DSC_HEADER"; then
+                echo "[+] camera DSC patch: chunks patched"
+            else
+                echo "[!] camera DSC patch: failed (likely build-version mismatch); continuing"
+            fi
+        else
+            echo "[-] camera DSC patch: $JB_DSC_HEADER not found, skipping"
+        fi
     else
-        echo "[-] hv_vmm DSC patch: $JB_DSC_CHUNKS_DIR not found, skipping"
+        echo "[-] DSC patches: $JB_DSC_CHUNKS_DIR not found, skipping"
     fi
 
     sudo hdiutil detach "$JB_MNT_SYSOS" -force
@@ -215,6 +238,35 @@ build_tweakloader() {
         -miphoneos-version-min=15.0 \
         -dynamiclib \
         -fobjc-arc -O3 \
+        -framework Foundation \
+        -o "$out" \
+        "$src"
+
+    ldid_sign "$out"
+    echo "$out"
+}
+
+# Builds the libvcamcaptured.dylib injected into /usr/libexec/cameracaptured
+# via the TweakLoader allowlist. Output goes to TEMP_DIR; caller scp's the
+# binary + companion plist to procursus/Library/MobileSubstrate/DynamicLibraries.
+build_libvcamcaptured() {
+    local src="$SCRIPT_DIR/vcamcaptured/libvcamcaptured.m"
+    local out="$TEMP_DIR/libvcamcaptured.dylib"
+    local sdk cc
+
+    [[ -f "$src" ]] || die "Missing libvcamcaptured source at $src"
+
+    sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+    cc="$(xcrun --sdk iphoneos -f clang)"
+
+    "$cc" -isysroot "$sdk" \
+        -arch arm64e \
+        -miphoneos-version-min=15.0 \
+        -dynamiclib \
+        -fobjc-arc -Os \
+        -install_name /var/jb/usr/lib/libvcamcaptured.dylib \
+        -framework CoreMedia \
+        -framework CoreVideo \
         -framework Foundation \
         -o "$out" \
         "$src"
@@ -479,6 +531,29 @@ ssh_cmd "/bin/chmod 0755 /mnt5/$BOOT_HASH/$JB_DIR_NAME/procursus/usr/lib/TweakLo
 
 echo "  [+] TweakLoader installed to procursus/usr/lib/TweakLoader.dylib"
 
+# ═══════════ JB-4.1 INSTALL libvcamcaptured ═════════════════════════
+# Inject dylib loaded into /usr/libexec/cameracaptured (via TweakLoader
+# allowlist in TweakLoader.m's kVPhoneAllowedDaemonPaths). Hosts the
+# synthetic FigCaptureSource + shm-frame reader paired with vphoned's
+# vsock 1338 listener on the guest side.
+echo ""
+echo "[JB-4.1] Building and installing libvcamcaptured..."
+LIBVCAM_OUT="$(build_libvcamcaptured)"
+LIBVCAM_DIR="/mnt5/$BOOT_HASH/$JB_DIR_NAME/procursus/Library/MobileSubstrate/DynamicLibraries"
+ssh_cmd "/bin/mkdir -p $LIBVCAM_DIR"
+scp_to "$LIBVCAM_OUT" "$LIBVCAM_DIR/libvcamcaptured.dylib"
+ssh_cmd "/usr/sbin/chown 0:0 $LIBVCAM_DIR/libvcamcaptured.dylib"
+ssh_cmd "/bin/chmod 0755 $LIBVCAM_DIR/libvcamcaptured.dylib"
+
+# The plist tells TweakLoader to load the dylib only inside cameracaptured
+# (Filter.Executables = ["cameracaptured"]); keep it next to the dylib.
+LIBVCAM_PLIST="$SCRIPT_DIR/vcamcaptured/libvcamcaptured.plist"
+if [[ -f "$LIBVCAM_PLIST" ]]; then
+    scp_to "$LIBVCAM_PLIST" "$LIBVCAM_DIR/libvcamcaptured.plist"
+    ssh_cmd "/bin/chmod 0644 $LIBVCAM_DIR/libvcamcaptured.plist"
+fi
+echo "  [+] libvcamcaptured installed to procursus/Library/MobileSubstrate/DynamicLibraries/"
+
 # ═══════════ JB-5 DEPLOY FIRST-BOOT SETUP ══════════════════════
 echo ""
 echo "[JB-5] Deploying first-boot setup..."
@@ -609,6 +684,7 @@ fi
 echo ""
 echo "[*] Unmounting device filesystems..."
 ssh_cmd "/sbin/umount /mnt1 2>/dev/null || true"
+ssh_cmd "/sbin/umount /mnt2 2>/dev/null || true"
 ssh_cmd "/sbin/umount /mnt3 2>/dev/null || true"
 ssh_cmd "/sbin/umount /mnt5 2>/dev/null || true"
 
