@@ -275,8 +275,10 @@ build_libvcamcaptured() {
     echo "$out"
 }
 
-# Builds the libcamfix.dylib substrate plugin loaded into Camera.app
-# (com.apple.camera) via TweakLoader. Implements the photo-delivery
+# Builds the libcamfix.dylib substrate plugin. Loaded into every process
+# that links AVFoundation via TweakLoader's Filter.Frameworks key —
+# Camera.app, third-party apps, anywhere the
+# documented capture interface is used. Implements the photo-delivery
 # path through CAMCaptureEngine + the preview/state guards that keep
 # the viewfinder live on the virtual camera.
 build_libcamfix() {
@@ -594,11 +596,11 @@ fi
 echo "  [+] libvcamcaptured installed to procursus/Library/MobileSubstrate/DynamicLibraries/"
 
 # ═══════════ JB-4.2 INSTALL libcamfix ═══════════════════════════════
-# Substrate plugin loaded into Camera.app (com.apple.camera). Hooks
-# AVCapturePhotoOutput's moment-capture path to route synthesized
-# AVCapturePhoto instances (backed by vphone shm frames) through
-# CAMCaptureEngine's normal photo-save pipeline. Pairs with the
-# preview-pump + session-state lies that keep the viewfinder live.
+# Substrate plugin loaded by TweakLoader into every process that links
+# AVFoundation. The companion plist's Filter.Frameworks = ["AVFoundation"]
+# tells TweakLoader to defer the dlopen until AVFoundation actually
+# appears in the loaded image list (via _dyld_register_func_for_add_image),
+# so processes that don't use AVF don't pay any cost.
 echo ""
 echo "[JB-4.2] Building and installing libcamfix..."
 LIBCAMFIX_OUT="$(build_libcamfix)"
@@ -606,8 +608,6 @@ scp_to "$LIBCAMFIX_OUT" "$LIBVCAM_DIR/libcamfix.dylib"
 ssh_cmd "/usr/sbin/chown 0:0 $LIBVCAM_DIR/libcamfix.dylib"
 ssh_cmd "/bin/chmod 0755 $LIBVCAM_DIR/libcamfix.dylib"
 
-# Filter.Bundles = ["com.apple.camera"] gates TweakLoader so the dylib
-# only loads inside Camera.app.
 LIBCAMFIX_PLIST="$SCRIPT_DIR/camfix/libcamfix.plist"
 if [[ -f "$LIBCAMFIX_PLIST" ]]; then
     scp_to "$LIBCAMFIX_PLIST" "$LIBVCAM_DIR/libcamfix.plist"

@@ -33,6 +33,9 @@
 #include <unistd.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <string.h>
 
 #define LOG_PATH "/tmp/camfix.log"
 #define SHM_PATH "/var/jb/var/mobile/Library/vphone-vcam-frame.shm"
@@ -180,9 +183,77 @@ static void cfx_install_setActiveFormat_hook(void) {
          cfx_orig_setActiveFormat);
 }
 
-// MARK: - capturePhoto swizzle (same as libcameratest)
+// MARK: - capturePhoto swizzle (modern + deprecated delegate paths)
 
 static IMP cfx_orig_capturePhoto = NULL;
+
+// Forward decls: helpers defined further down — shared with the
+// moment-capture (Camera.app) delivery path.
+static IOSurfaceRef cfx_build_iosurface_from_shm(uint32_t *outW, uint32_t *outH) CF_RETURNS_RETAINED;
+static CGImageRef cfx_build_cgimage_from_shm(uint32_t *outW, uint32_t *outH) CF_RETURNS_RETAINED;
+static NSData *cfx_build_jpeg_from_shm(uint32_t *outW, uint32_t *outH);
+static id cfx_build_avcapturephoto_with_request(IOSurfaceRef surf,
+                                                uint32_t w, uint32_t h,
+                                                id captureRequest);
+
+// Associated-object keys (used by fileDataRepresentation /
+// CGImageRepresentation hooks to recognize "our" photos). Defined here
+// so cfx_deliver_capturePhoto can reference them before the hooks that
+// also use them are declared further down.
+static const void *CFX_ASSOC_JPEG_KEY = &CFX_ASSOC_JPEG_KEY;
+static const void *CFX_ASSOC_CGIMG_KEY = &CFX_ASSOC_CGIMG_KEY;
+
+static void cfx_deliver_capturePhoto(id output, id delegate, id settings) {
+  // Modern path used by any AVF client: build a real AVCapturePhoto from
+  // the shm frame, tag it with our JPEG + CGImage so fileDataRepresentation
+  // / CGImageRepresentation return our bytes, fire the modern delegate
+  // didFinishProcessingPhoto:error:.
+  // Falls back to the deprecated CMSampleBuffer delegate if the client
+  // opts into it (only test harnesses do; production AVF clients implement
+  // the modern method).
+  SEL oldSel = NSSelectorFromString(
+      @"captureOutput:didFinishProcessingPhotoSampleBuffer:previewPhotoSampleBuffer:resolvedSettings:bracketSettings:error:");
+  if ([delegate respondsToSelector:oldSel]) {
+    CMSampleBufferRef sbuf = cfx_build_cmsb();
+    if (!sbuf) { cfxlog(@"[capturePhoto] build_cmsb returned NULL"); return; }
+    cfxlog(@"[capturePhoto] dispatching deprecated didFinishProcessingPhotoSampleBuffer:");
+    ((void (*)(id, SEL, id, CMSampleBufferRef, CMSampleBufferRef, id, id, id))objc_msgSend)(
+        delegate, oldSel, output, sbuf, NULL, (id)nil, (id)nil, (id)nil);
+    CFRelease(sbuf);
+    return;
+  }
+
+  SEL S5 = @selector(captureOutput:didFinishProcessingPhoto:error:);
+  if (![delegate respondsToSelector:S5]) {
+    cfxlog(@"[capturePhoto] delegate implements neither modern nor deprecated method");
+    return;
+  }
+
+  uint32_t w = 0, h = 0;
+  IOSurfaceRef surf = cfx_build_iosurface_from_shm(&w, &h);
+  if (!surf) { cfxlog(@"[capturePhoto] no IOSurface"); return; }
+
+  // captureRequest = nil (no CAMCaptureEngine outside Camera.app). The
+  // AVCapturePhoto init handles nil safely — objc_msgSend on nil returns 0
+  // for the resolvedSettings / unresolvedSettings calls it makes during init.
+  id photo = cfx_build_avcapturephoto_with_request(surf, w, h, nil);
+  CFRelease(surf);
+  if (!photo) { cfxlog(@"[capturePhoto] no AVCapturePhoto"); return; }
+
+  NSData *jpeg = cfx_build_jpeg_from_shm(NULL, NULL);
+  CGImageRef cgImg = cfx_build_cgimage_from_shm(NULL, NULL);
+  if (jpeg) objc_setAssociatedObject(photo, CFX_ASSOC_JPEG_KEY, jpeg,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  if (cgImg) {
+    objc_setAssociatedObject(photo, CFX_ASSOC_CGIMG_KEY,
+                             (__bridge id)cgImg,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGImageRelease(cgImg);
+  }
+  cfxlog(@"[capturePhoto] firing didFinishProcessingPhoto: with vcam photo (%lu bytes jpeg)",
+         (unsigned long)jpeg.length);
+  ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, S5, output, photo, nil);
+}
 
 static void cfx_capturePhoto_hook(id self, SEL _cmd, id settings, id delegate) {
   cfxlog(@"[capturePhoto] self=%p settings=%@ delegate=%@",
@@ -210,25 +281,12 @@ static void cfx_capturePhoto_hook(id self, SEL _cmd, id settings, id delegate) {
     ((OrigFn)cfx_orig_capturePhoto)(self, _cmd, settings, delegate);
     return;
   }
+  __strong id retainedSelf = self;
+  __strong id retainedDelegate = delegate;
+  __strong id retainedSettings = settings;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     @autoreleasepool {
-      CMSampleBufferRef sbuf = cfx_build_cmsb();
-      if (!sbuf) {
-        cfxlog(@"build_cmsb returned NULL");
-        return;
-      }
-      SEL oldSel = NSSelectorFromString(
-          @"captureOutput:didFinishProcessingPhotoSampleBuffer:previewPhotoSampleBuffer:resolvedSettings:bracketSettings:error:");
-      if ([delegate respondsToSelector:oldSel]) {
-        cfxlog(@"dispatching deprecated didFinishProcessingPhotoSampleBuffer:");
-        ((void (*)(id, SEL, id, CMSampleBufferRef, CMSampleBufferRef, id, id, id))objc_msgSend)(
-            delegate, oldSel,
-            self, sbuf, NULL,
-            (id)nil, (id)nil, (id)nil);
-      } else {
-        cfxlog(@"delegate doesn't implement deprecated sample-buffer method");
-      }
-      CFRelease(sbuf);
+      cfx_deliver_capturePhoto(retainedSelf, retainedDelegate, retainedSettings);
     }
   });
 }
@@ -846,10 +904,8 @@ static id cfx_build_avcapturephoto(IOSurfaceRef surf, uint32_t w, uint32_t h) {
 // MARK: - fileDataRepresentation / CGImageRepresentation hooks
 //
 // We tag synthesized photos via objc_setAssociatedObject so the hook
-// recognizes "ours" without a global dict.
-
-static const void *CFX_ASSOC_JPEG_KEY = &CFX_ASSOC_JPEG_KEY;
-static const void *CFX_ASSOC_CGIMG_KEY = &CFX_ASSOC_CGIMG_KEY;
+// recognizes "ours" without a global dict. Keys are defined earlier in
+// the file alongside cfx_deliver_capturePhoto's forward decls.
 
 static IMP cfx_orig_fileDataRep = NULL;
 static IMP cfx_orig_cgImageRep = NULL;
@@ -1247,17 +1303,57 @@ static void cfx_install_session_state_lies(void) {
   }
 }
 
+// When libcamfix is loaded as an LC_LOAD_DYLIB dependency of AVFoundation
+// (via the DSC patch cfw_patch_avf_load_dylib.py), our constructor fires
+// during dyld's image-load phase — possibly BEFORE AVFCapture's classes
+// are registered. Defer hook installation to a dyld add-image callback
+// that fires once for every image. Install hooks the first time we see
+// AVFCapture (the framework that actually defines AVCapture*),  which
+// guarantees its classes are registered. Idempotent: install at most once.
+
+static dispatch_once_t cfx_install_once_token;
+
+static void cfx_install_all_hooks(void) {
+  dispatch_once(&cfx_install_once_token, ^{
+    cfxlog(@"installing hooks (process=%@, pid=%d)",
+           NSProcessInfo.processInfo.processName ?: @"?", getpid());
+    cfx_install_setActiveFormat_hook();
+    cfx_install_capturePhoto_hook();
+    cfx_install_moment_capture_hooks();
+    cfx_install_session_guards();
+    cfx_install_session_state_lies();
+    cfx_install_preview_layer_hooks();
+    cfx_install_photo_representation_hooks();
+    cfx_install_capturerequest_stubs();
+    cfx_start_scan_timer();
+  });
+}
+
+static BOOL cfx_image_is_avfcapture(const struct mach_header *mh) {
+  // dyld add-image callback gives us only the load address; recover the
+  // install path via dyld_image_count + dyld_get_image_header iteration.
+  uint32_t count = _dyld_image_count();
+  for (uint32_t i = 0; i < count; i++) {
+    if (_dyld_get_image_header(i) != mh) continue;
+    const char *name = _dyld_get_image_name(i);
+    if (!name) return NO;
+    // AVFCapture lives at .../PrivateFrameworks/AVFCapture.framework/AVFCapture
+    return strstr(name, "/AVFCapture.framework/AVFCapture") != NULL;
+  }
+  return NO;
+}
+
+static void cfx_on_add_image(const struct mach_header *mh, intptr_t slide) {
+  (void)slide;
+  if (cfx_image_is_avfcapture(mh)) cfx_install_all_hooks();
+}
+
 __attribute__((constructor))
 static void cfx_init(void) {
-  cfxlog(@"loaded into %@ (pid=%d)",
+  cfxlog(@"libcamfix loaded into %@ (pid=%d)",
          NSProcessInfo.processInfo.processName ?: @"?", getpid());
-  cfx_install_setActiveFormat_hook();
-  cfx_install_capturePhoto_hook();
-  cfx_install_moment_capture_hooks();
-  cfx_install_session_guards();
-  cfx_install_session_state_lies();
-  cfx_install_preview_layer_hooks();
-  cfx_install_photo_representation_hooks();
-  cfx_install_capturerequest_stubs();
-  cfx_start_scan_timer();
+  // _dyld_register_func_for_add_image fires the callback synchronously
+  // for every already-loaded image, then once per future image. So
+  // whether AVFCapture loads before or after libcamfix, we catch it.
+  _dyld_register_func_for_add_image(cfx_on_add_image);
 }

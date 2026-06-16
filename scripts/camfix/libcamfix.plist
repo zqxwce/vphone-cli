@@ -4,9 +4,9 @@
 <dict>
 	<key>Filter</key>
 	<dict>
-		<key>Bundles</key>
+		<key>Frameworks</key>
 		<array>
-			<string>com.apple.camera</string>
+			<string>AVFoundation</string>
 		</array>
 	</dict>
 </dict>
