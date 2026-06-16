@@ -275,6 +275,45 @@ build_libvcamcaptured() {
     echo "$out"
 }
 
+# Builds the libcamfix.dylib substrate plugin loaded into Camera.app
+# (com.apple.camera) via TweakLoader. Implements the photo-delivery
+# path through CAMCaptureEngine + the preview/state guards that keep
+# the viewfinder live on the virtual camera.
+build_libcamfix() {
+    local src="$SCRIPT_DIR/camfix/libcamfix.m"
+    local out="$TEMP_DIR/libcamfix.dylib"
+    local sdk cc
+
+    [[ -f "$src" ]] || die "Missing libcamfix source at $src"
+
+    sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+    cc="$(xcrun --sdk iphoneos -f clang)"
+
+    "$cc" -isysroot "$sdk" \
+        -arch arm64e \
+        -miphoneos-version-min=15.0 \
+        -dynamiclib \
+        -fobjc-arc -Os \
+        -install_name /var/jb/Library/MobileSubstrate/DynamicLibraries/libcamfix.dylib \
+        -framework AVFoundation \
+        -framework CoreImage \
+        -framework CoreGraphics \
+        -framework CoreMedia \
+        -framework CoreVideo \
+        -framework Foundation \
+        -framework ImageIO \
+        -framework IOSurface \
+        -framework MobileCoreServices \
+        -framework Photos \
+        -framework QuartzCore \
+        -framework UIKit \
+        -o "$out" \
+        "$src"
+
+    ldid_sign "$out"
+    echo "$out"
+}
+
 remote_mount() {
     local dev="$1" mnt="$2" opts="${3:-rw}"
     ssh_cmd "/bin/mkdir -p $mnt"
@@ -553,6 +592,28 @@ if [[ -f "$LIBVCAM_PLIST" ]]; then
     ssh_cmd "/bin/chmod 0644 $LIBVCAM_DIR/libvcamcaptured.plist"
 fi
 echo "  [+] libvcamcaptured installed to procursus/Library/MobileSubstrate/DynamicLibraries/"
+
+# ═══════════ JB-4.2 INSTALL libcamfix ═══════════════════════════════
+# Substrate plugin loaded into Camera.app (com.apple.camera). Hooks
+# AVCapturePhotoOutput's moment-capture path to route synthesized
+# AVCapturePhoto instances (backed by vphone shm frames) through
+# CAMCaptureEngine's normal photo-save pipeline. Pairs with the
+# preview-pump + session-state lies that keep the viewfinder live.
+echo ""
+echo "[JB-4.2] Building and installing libcamfix..."
+LIBCAMFIX_OUT="$(build_libcamfix)"
+scp_to "$LIBCAMFIX_OUT" "$LIBVCAM_DIR/libcamfix.dylib"
+ssh_cmd "/usr/sbin/chown 0:0 $LIBVCAM_DIR/libcamfix.dylib"
+ssh_cmd "/bin/chmod 0755 $LIBVCAM_DIR/libcamfix.dylib"
+
+# Filter.Bundles = ["com.apple.camera"] gates TweakLoader so the dylib
+# only loads inside Camera.app.
+LIBCAMFIX_PLIST="$SCRIPT_DIR/camfix/libcamfix.plist"
+if [[ -f "$LIBCAMFIX_PLIST" ]]; then
+    scp_to "$LIBCAMFIX_PLIST" "$LIBVCAM_DIR/libcamfix.plist"
+    ssh_cmd "/bin/chmod 0644 $LIBVCAM_DIR/libcamfix.plist"
+fi
+echo "  [+] libcamfix installed to procursus/Library/MobileSubstrate/DynamicLibraries/"
 
 # ═══════════ JB-5 DEPLOY FIRST-BOOT SETUP ══════════════════════
 echo ""

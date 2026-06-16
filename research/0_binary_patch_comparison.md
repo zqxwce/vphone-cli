@@ -25,6 +25,23 @@
 > - **SystemVersion.plist `ProductBuildVersion` (EXP-JB-7, opt-in)** — gated on
 >   `SPOOF_BUILD=<id>`. Rewrites the build identifier in the rootfs and
 >   cryptex copies of `SystemVersion.plist`.
+> - **Camera.app accessibility** — at fw_patch time: the `/product/camera`
+>   node, two `/product` cam-offset rewrites (Tier B), three new
+>   `/product` child nodes `facetime` / `audio` / `iopm` (Tier C), and
+>   five minimal `/arm-io` stubs `isp` / `ispRtb` /
+>   `smc/iop-smc-nub/smc-ext-charger` carrying camera-front, camera-rear
+>   and camera-driver (Tier F). At install time: the 5
+>   `+[_NUStyleTransfer*Processor processWithInputs:...]` DSC
+>   short-circuits in NeutrinoCore plus a 1-instruction
+>   `+[AVCaptureDevice authorizationStatusForMediaType:]` rewrite in
+>   AVFCapture that returns `Authorized` for any media type
+>   (Stage 0 of the vcam stack — auth gate only; downstream
+>   cameracaptured/vcamd plumbing for actual frame delivery is open
+>   work). Together these make Camera.app's icon show on the home
+>   screen and in Spotlight, the viewfinder render, and arbitrary apps
+>   stop bailing on the camera permission check. The NeutrinoCore patch
+>   stops the viewfinder's CIImageProcessorKernel chain from asserting
+>   on a nil descriptor when ANE detection comes back NO on the VM.
 
 ## Boot Chain Patches
 
@@ -434,6 +451,64 @@ binaries with `ldid_sign` tripped this check on `mobile_obliterator`.
   on the live `/mnt1/usr/libexec/watchdogd` (scp-down, patch, scp-up,
   chmod 0755). JB and DEV install scripts do NOT run this step.
 
+### DeviceTree `/product/camera` node addition at fw_patch time (EXP only)
+
+`DeviceTreePatcher` carries an `experimentalNodeAdditions` list with one
+entry — a `/device-tree/product/camera` child node. Applied only when
+`includeIdentityPatches` is true (i.e. variant `.exp`); other variants
+leave the product subtree unchanged.
+
+| Property                            | Type          | Value | Purpose                                                 |
+|-------------------------------------|---------------|-------|---------------------------------------------------------|
+| `name`                              | cstring       | `camera` | DT node name (auto-added from `nodeName`).           |
+| `aggregate-camera`                  | uint32        | `1`   | Backs MG `aggregateCameraCapability` getter.            |
+| `auto-focus`                        | uint32        | `1`   | Backs MG `autoFocusCameraCapability` getter.            |
+| `flash`                             | uint32        | `1`   | Backs MG `cameraFlashCapability` getter.                |
+| `pearl-camera`                      | uint32        | `1`   | Backs MG `pearlCameraCapability` getter.                |
+| `panorama`                          | uint32        | `1`   | Backs MG `panoramaCameraCapability` getter.             |
+| `pipelined-stillimage-capability`   | uint32        | `1`   | Backs MG `pipelinedStillImageCaptureCapability`.        |
+| `rear-burst`, `front-burst`         | uint32        | `1`   | Backs MG burst-capability getters.                      |
+| `video-cap`                         | uint32        | `2`   | Video capture level (real D47AP value).                 |
+| `camera-hdr-version`                | uint32        | `3`   | HDR version (real D47AP value).                         |
+| `camera-ui-version`                 | uint32        | `2`   | UI version selector (real D47AP value).                 |
+
+Why this is necessary: `libMobileGestalt.dylib` resolves
+`MGGetBoolAnswer("still-camera")` (cstring at vmaddr `0x1b1c5fedd`) via a
+chain that reads `IODeviceTree:/product/camera` (cstring at vmaddr
+`0x1b1c5832a`, **65 ADRP+ADD xrefs in the same dylib's `__text`**). The
+canonical iPhone17,3 D47AP DT carries this node with 64 capability
+properties; the vphone600AP DT ships **zero** `camera`, `audio`,
+`facetime`, or `back-camera` references under `/product`. Without
+the node, SpringBoard's `SBAppTags = ["still-camera"]` filter hides
+Camera.app's icon and refuses to launch the bundle.
+
+The node alone is not enough: the SBAppTags resolver also chains
+through `/product` direct properties (`assistant`, `dictation`,
+`compatible-device-fallback`, `chrome-identifier`, …), most of which
+ship as 12-byte `'syscfg/XXXX'` cstring placeholders on vphone600 and
+read back as NO. Tier 1d (below) rewrites those.
+
+Idempotent: re-running against an already-patched DT detects the
+existing child and skips.
+
+### Camera DSC patch (EXP only)
+
+`apply_all_camera_patches` in `scripts/patchers/cfw_patch_camera_dsc.py`
+runs two patch families. Symbols are resolved per-build via
+`ipsw dyld symaddr` against the cryptex's `dyld_shared_cache_arm64e`
+header.
+
+| # | Target | Framework | Effect |
+|---|---|---|---|
+| 1 | `+[_NUStyleTransfer{,Apply,Thumbnail,Learn,Interpolate}Processor processWithInputs:arguments:output:error:]` (5 entry points) | NeutrinoCore | Each replaced with `mov w0, #0; ret`. Camera's CIImageProcessorKernel chain that drives the style preview thumbnails short-circuits before reaching `+[_NUStyleEngine usingSharedStyleEngineForUsage:...]` → `_NUStyleEngineMemoryResource initWithDevice:descriptor:` which would otherwise assert on a nil descriptor (root cause is an upstream ANE-detection gate in `CMIStyleEngineCommonSettings`; we workaround at the consumer instead of unblocking it). |
+| 2 | `+[AVCaptureDevice authorizationStatusForMediaType:]` | AVFCapture | Replaced with `mov w0, #3; ret` (AVAuthorizationStatusAuthorized = 3). Any process probing camera/audio/etc. media-type authorization gets "Authorized" without going through TCC. Stage 0 of the vcam stack — makes apps stop bailing on the auth check. Audio still doesn't work on the VM, so the broader scope is harmless (audio consumers would have failed downstream regardless). Downstream pipeline (cameracaptured rewrite, vcamd daemon) still owed for actual frame delivery. |
+
+Wired into `cfw_install_exp.sh` immediately after the hv_vmm DSC step,
+inside the same `hdiutil attach` block (one mount/unmount per install).
+Page-hash re-attestation keeps the cryptex's CodeDirectory slots
+consistent with the modified pages so `amfid` / TXM accepts the DSC at
+next boot.
+
 ### DeviceTree identity properties at fw_patch time (EXP only)
 
 `DeviceTreePatcher` carries two property-patch lists: `basePropertyPatches`
@@ -459,6 +534,71 @@ EXP-JB-6 post-restore):
 Root `model` and root `target-type` are deliberately NOT in this list —
 both have been empirically shown to break restore. Those edits run
 post-restore as EXP-JB-6.
+
+Bulk `/product` direct-property completion (rewriting the ~30
+`'syscfg/XXXX'` placeholders to D47AP integer/string values) was
+attempted to make `MGGetBoolAnswer("still-camera")` answer YES via the
+DT path alone. It broke screen rendering on the VM (the display
+pipeline / framebuffer pulls one or more `/product` capability props
+during init and chooses a render path the VM can't service). Reverted.
+A narrower set targeted at the Camera-icon resolver chain (Tier B + C
++ F, below) does work without breaking display.
+
+### DeviceTree Camera-icon completion (Tier B + C + F, EXP only)
+
+Two `PropertyPatch` entries in `identityPropertyPatches`, three
+`AddChildNodePatch` entries appended to `experimentalNodeAdditions`
+for `/product/*` children, and five more for `/arm-io/*` stubs.
+Empirically: this is the set that makes Camera.app's icon visible on
+the home screen and in Spotlight without breaking screen rendering.
+
+**Tier B — `/product` cam-offset rewrites.** vphone600 ships these
+as 12-byte `'syscfg/{fcof,rcof}'` cstring placeholders. d47ap carries
+20-byte little-endian geometry blobs. Consumed by Camera.app / ARKit
+/ FaceTime for image-centering math.
+
+| Property | Old length | New length | New value (hex) |
+|----------|:----------:|:----------:|------------------|
+| `/product::front-cam-offset-from-center` | 12 | 20 | `61000100921c0000d8130000e803000000000000` |
+| `/product::rear-cam-offset-from-center`  | 12 | 20 | `eda50000b256000059080000e803000000000000` |
+
+**Tier C — new `/product/*` child nodes.** d47ap carries three
+sibling nodes to `/product/camera`. vphone600 has none of them.
+
+| Node | Props | Camera relevance |
+|------|:-----:|------------------|
+| `/product/facetime` | 9 (excl. AAPL,phandle) | Front-camera video-call config — bitrates, codec encoding/decoding, tnr-mode-back/front. |
+| `/product/audio` | 31 (excl. AAPL,phandle) | Carries `supports-spatial-audio-capture=1` + `supports-spatial-facetime=1` (camera-joint). Rest is audio config. |
+| `/product/iopm` | 2 (excl. AAPL,phandle) | `aot-mode=13` + `aot-linger-time-ms=0`. Always-On Technology mode. |
+
+All property values copied byte-for-byte from
+`ipsws/iPhone17,3_26.5_23F77_Restore_extracted/Firmware/all_flash/DeviceTree.d47ap.im4p`.
+
+**Tier F — `/arm-io/*` minimal camera-flag stubs.** d47ap carries
+`/arm-io/isp` (65 props), `/arm-io/ispRtb` (53 props), and a deep
+`/arm-io/smc/iop-smc-nub/smc-ext-charger` chain (3 levels of node).
+vphone600 has none of these paths. We add minimal stub nodes carrying
+ONLY the camera-* properties and the mandatory auto-`name`,
+deliberately omitting `compatible`/`device_type`/`reg`/`interrupts`,
+so no IOKit kext finds a matching `compatible=` and tries to probe
+non-existent ISP / SMC hardware.
+
+| Path | Property | Value |
+|------|----------|-------|
+| `/arm-io/smc` | (stub — parent for chain) | — |
+| `/arm-io/smc/iop-smc-nub` | (stub — parent for charger) | — |
+| `/arm-io/smc/iop-smc-nub/smc-ext-charger` | `camera-driver` | str `'AppleH16CamIn'` |
+| `/arm-io/isp` | `camera-front`, `camera-rear` | int32:1, int32:1 |
+| `/arm-io/ispRtb` | `camera-front`, `camera-rear` | int32:1, int32:1 |
+
+Dependency order: the patcher walks `experimentalNodeAdditions` in
+array order against the in-memory tree, so each entry that resolves
+to a parent added by an earlier entry resolves correctly.
+
+Idempotent: re-running the patcher against an already-modified DT
+detects the existing child by name and skips. The DT IM4P that ships
+on subsequent boots is signed by Apple but the existing iBSS/iBEC/LLB
+`image4_validate_property_callback` bypass accepts arbitrary payloads.
 
 ### Post-restore DT identity rewrite (EXP-JB-6, EXP only)
 
@@ -513,6 +653,7 @@ cache rebuild.
 | BaseBin hook deployment (`*.dylib` -> `/mnt1/cores`) | -                        | -                          | Y (JB-3)                                      | Y (JB-3)                                              |
 | First-boot JB finalization (`vphone_jb_setup.sh`) | -                           | -                          | Y (post-boot)                                 | Y (post-boot)                                         |
 | DSC pre-patch (`kern.hv_vmm_present` byte-5 mangle + slot reattest) | -         | -                          | -                                             | Y (pre-step, before base CFW)                         |
+| DSC camera patches (12 patches across CMCapture / CoreMediaIO / AVFCapture / libMobileGestalt) | - | -                  | -                                             | Y (pre-step, same cryptex mount as hv_vmm)            |
 | `watchdogd` surgical 2-insn patch + slot reattest | -                           | -                          | -                                             | Y (EXP-JB-3.5)                                        |
 | Post-restore DT identity rewrite (`devicetree.img4`)| -                         | -                          | -                                             | Y (EXP-JB-6)                                          |
 | `SystemVersion.plist` `ProductBuildVersion` rewrite | -                         | -                          | -                                             | Y (EXP-JB-7, opt-in via `SPOOF_BUILD`)                |
@@ -534,12 +675,13 @@ cache rebuild.
 | Kernel (EXP methods, `hv_vmm`)     |       - |   - |   - |   6 |
 | DeviceTree base properties         |       4 |   4 |   4 |   4 |
 | DeviceTree EXP identity properties |       - |   - |   - |   8 |
-| Boot chain total                   |      46 |  58 | 117 | 131 |
+| DeviceTree EXP node additions      |       - |   - |   - |   1 (`/product/camera`) |
+| Boot chain total                   |      46 |  58 | 117 | 132 |
 | CFW binary patches (base)          |       4 |   5 |   6 |   6 |
-| CFW EXP-only steps                 |       - |   - |   - |   4 (DSC pre-patch, watchdogd EXP-JB-3.5, post-restore DT EXP-JB-6, build-version EXP-JB-7 opt-in) |
+| CFW EXP-only steps                 |       - |   - |   - |   5 (hv_vmm DSC, camera DSC ×12, watchdogd EXP-JB-3.5, post-restore DT EXP-JB-6, build-version EXP-JB-7 opt-in) |
 | CFW installed components           |       6 |   7 |   9 |   9 |
-| CFW total                          |      10 |  12 |  15 |  19 |
-| Grand total                        |      56 |  70 | 132 | 150 |
+| CFW total                          |      10 |  12 |  15 |  31 |
+| Grand total                        |      56 |  70 | 132 | 163 |
 
 ## Ramdisk Variant Matrix
 
