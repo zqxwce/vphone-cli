@@ -21,9 +21,24 @@ enum VPhoneVZPatches {
     private static let frameworkPath =
         "/System/Library/Frameworks/Virtualization.framework/Versions/A/Virtualization"
 
-    /// Unsliced vmaddr of `usb_device_service_has_isochronous_endpoints` in
-    /// Virtualization.framework (arm64e, macOS 26.x). Verified by disassembly.
-    private static let isoCheckVmaddr: UInt = 0x22cff2a00
+    /// Unsliced vmaddr of
+    /// `VzCore::Hardware::Usb::usb_device_service_has_isochronous_endpoints(Base::IoService const&)`
+    /// in Virtualization.framework (arm64e). Resolved from the framework's
+    /// LC_SYMTAB local-symbol entry
+    /// `__ZN6VzCore8Hardware3Usb44usb_device_service_has_isochronous_endpointsERKN4Base9IoServiceE`
+    /// in the macOS 27.0 (Virtualization 304.0.1) dyld shared cache. The check
+    /// still gates the passthrough config validation path (two callers on 27.0).
+    /// macOS 26.x used 0x22cff2a00; re-reveal via LC_SYMTAB on each major OS
+    /// bump (procedure in research/virtualization_framework_27_vs_2651.md). The
+    /// `isoCheckExpectedPrologue` guard below refuses to patch unless the live
+    /// bytes match, so a stale address after an OS update fails safe instead of
+    /// corrupting the shared framework image.
+    private static let isoCheckVmaddr: UInt = 0x222f720cc
+
+    /// First 3 instruction words of the unpatched iso-check function on 27.0
+    /// (`pacibsp` / `sub sp, sp, #0x70` / `stp x22, x21, [sp, #0x40]`). The patch
+    /// only proceeds if the live bytes match — version drift then fails safe.
+    private static let isoCheckExpectedPrologue: [UInt32] = [0xd503237f, 0xd101c3ff, 0xa90457f6]
 
     // Idempotency flag. Called only from @MainActor contexts; concurrency-safe in practice.
     nonisolated(unsafe) private static var didPatchIsoCheck = false
@@ -51,6 +66,21 @@ enum VPhoneVZPatches {
 
         let target = isoCheckVmaddr &+ UInt(bitPattern: slide)
         print("[vz-patch] iso-check fn @ 0x\(String(target, radix: 16)) (slide=0x\(String(slide, radix: 16)))")
+
+        // Fail-safe: only patch if the live bytes match the known iso-check
+        // prologue. Guards against a stale isoCheckVmaddr after an OS update
+        // writing the stub into the wrong place (which would corrupt the shared
+        // framework image). Reading r-x framework text directly is fine.
+        guard let probe = UnsafePointer<UInt32>(bitPattern: target) else {
+            print("[vz-patch] iso-check target address invalid — skipping")
+            return
+        }
+        let live = (0..<isoCheckExpectedPrologue.count).map { probe[$0] }
+        if live != isoCheckExpectedPrologue {
+            let hex = live.map { String(format: "0x%08x", $0) }.joined(separator: " ")
+            print("[vz-patch] iso-check prologue mismatch (got \(hex)) — skipping (address stale for this build?)")
+            return
+        }
 
         // ARM64e replacement (12 bytes, preserves PAC/BTI safety):
         //   pacibsp           0xd503237f  ; sign LR (BTI landing pad equivalent)

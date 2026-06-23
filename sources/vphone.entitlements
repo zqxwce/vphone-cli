@@ -18,6 +18,23 @@
 	<true/>
 	<key>com.apple.vm.device-access</key>
 	<true/>
+	<!-- macOS 27.0 USB passthrough surface. amfidont is active so entitlement
+	     use is unconstrained; add the full set the framework references.
+	     - private.usb.capture: AccessoryAccess capture/authorize gate
+	       (-_authorizeAndAttachIOUSBHostPassthroughDevice:, IOServiceAuthorize).
+	       Without it the path returns "Access to USB Passthrough device has
+	       been denied."
+	     - extension.usb-device-passthrough / extension.usb-hci /
+	       usb-controller: the framework's own USB passthrough / XHCI capability
+	       entitlements. -->
+	<key>com.apple.private.usb.capture</key>
+	<true/>
+	<key>com.apple.virtualization.extension.usb-device-passthrough</key>
+	<true/>
+	<key>com.apple.virtualization.extension.usb-hci</key>
+	<true/>
+	<key>com.apple.virtualization.usb-controller</key>
+	<true/>
 	<key>com.apple.security.temporary-exception.iokit-user-client-class</key>
 	<array>
 		<string>AppleUSBHostDeviceUserClient</string>

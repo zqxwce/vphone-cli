@@ -32,11 +32,11 @@ struct VPhoneHostUSBDevice: Hashable {
 
 // MARK: - Controller delegate stub
 //
-// VZUSBController has a private `setDelegate:` accepting an object conforming to
-// the private `VZUSBControllerDelegate` protocol (selector
-// `usbController:passthroughDeviceDidDisconnect:`). UTM sets this before
-// attach. We mirror that — the framework may use the presence of a delegate as
-// part of its authorization flow.
+// VZUSBController has a private `setDelegate:`. On macOS 27.0 there is no formal
+// delegate protocol — the framework messages the delegate via untyped
+// selectors. We implement the ones it sends so attach/detach lifecycle and
+// hotplug failures surface. UTM sets a delegate before attach; we mirror that —
+// the framework may use the presence of a delegate as part of its flow.
 @objc final class VPhoneUSBControllerDelegate: NSObject {
     @objc(usbController:passthroughDeviceWillDisconnect:)
     func passthroughDeviceWillDisconnect(_ controller: AnyObject, device: AnyObject) {
@@ -44,9 +44,23 @@ struct VPhoneHostUSBDevice: Hashable {
         print("[usb] passthroughDeviceWillDisconnect — host device went away")
     }
 
-    @objc(usbController:passthroughDeviceDidDisconnect:)
-    func passthroughDeviceDidDisconnect(_ controller: AnyObject, device: AnyObject) {
-        print("[usb] passthroughDeviceDidDisconnect")
+    // 27.0 renamed the did-disconnect selector (was
+    // `usbController:passthroughDeviceDidDisconnect:` on 26.x).
+    @objc(usbController:usbPassthroughDeviceDidDisconnect:)
+    func usbPassthroughDeviceDidDisconnect(_ controller: AnyObject, device: AnyObject) {
+        print("[usb] usbPassthroughDeviceDidDisconnect")
+    }
+
+    // 27.0 hotplug failure callbacks — surface attach/detach errors that
+    // otherwise stay inside the framework's hub plumbing.
+    @objc(usbController:hub:passthroughDevice:didFailToAttachWithError:)
+    func didFailToAttach(_ controller: AnyObject, hub: AnyObject, device: AnyObject, error: NSError) {
+        print("[usb] didFailToAttach: domain=\(error.domain) code=\(error.code) \(error.localizedDescription)")
+    }
+
+    @objc(usbController:hub:passthroughDevice:didFailToDetachWithError:)
+    func didFailToDetach(_ controller: AnyObject, hub: AnyObject, device: AnyObject, error: NSError) {
+        print("[usb] didFailToDetach: domain=\(error.domain) code=\(error.code) \(error.localizedDescription)")
     }
 }
 
