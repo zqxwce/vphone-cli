@@ -1,0 +1,36 @@
+// VPhoneAudioDevice.iig — IOUserAudioDevice subclass (output-only, null sink)
+#ifndef VPhoneAudioDevice_h
+#define VPhoneAudioDevice_h
+
+#include <DriverKit/DriverKit.iig>
+#include <AudioDriverKit/IOUserAudioDevice.iig>
+#include <AudioDriverKit/IOUserAudioStream.iig>
+#include <AudioDriverKit/AudioDriverKitTypes.h>
+#include <DriverKit/IOTimerDispatchSource.iig>
+
+using namespace AudioDriverKit;
+
+class IOUserAudioDriver;
+
+class VPhoneAudioDevice: public IOUserAudioDevice
+{
+public:
+    virtual bool          init(IOUserAudioDriver* in_driver,
+                               bool in_supports_prewarming,
+                               OSString* in_device_uid,
+                               OSString* in_model_uid,
+                               OSString* in_manufacturer_uid,
+                               uint32_t in_zero_timestamp_period) override LOCALONLY;
+    virtual void          free() override LOCALONLY;
+    virtual kern_return_t StartIO(IOUserAudioStartStopFlags in_flags) final LOCALONLY;
+    virtual kern_return_t StopIO(IOUserAudioStartStopFlags in_flags) final LOCALONLY;
+
+private:
+    kern_return_t StartTimers() LOCALONLY;
+    void          StopTimers() LOCALONLY;
+    void          UpdateTimers() LOCALONLY;
+    virtual void  ZtsTimerOccurred(OSAction* action, uint64_t time)
+                      TYPE(IOTimerDispatchSource::TimerOccurred);
+};
+
+#endif /* VPhoneAudioDevice_h */

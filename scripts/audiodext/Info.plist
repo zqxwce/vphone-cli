@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>      <string>en</string>
+    <key>CFBundleExecutable</key>             <string>com.apple.vphone.audiodext</string>
+    <key>CFBundleIdentifier</key>             <string>com.apple.vphone.audiodext</string>
+    <key>CFBundleInfoDictionaryVersion</key>  <string>6.0</string>
+    <key>CFBundleName</key>                   <string>VPhoneAudio</string>
+    <key>CFBundlePackageType</key>            <string>DEXT</string>
+    <key>CFBundleShortVersionString</key>     <string>1.0</string>
+    <key>CFBundleVersion</key>                <string>1</string>
+    <key>CFBundleSupportedPlatforms</key>     <array><string>DriverKit</string></array>
+    <key>OSBundleUsageDescription</key>       <string>VPhone virtual audio output device</string>
+    <key>OSMinimumDriverKitVersion</key>      <string>25.5</string>
+
+    <key>IOKitPersonalities</key>
+    <dict>
+        <key>VPhoneAudio</key>
+        <dict>
+            <key>CFBundleIdentifier</key>        <string>com.apple.vphone.audiodext</string>
+            <key>CFBundleIdentifierKernel</key>  <string>com.apple.kpi.iokit</string>
+            <key>IOClass</key>                   <string>IOUserService</string>
+            <key>IOProviderClass</key>           <string>IOUSBHostInterface</string>
+            <key>IOMatchCategory</key>           <string>VPhoneAudio</string>
+            <key>IOUserClass</key>               <string>VPhoneAudio</string>
+            <key>IOUserServerName</key>          <string>com.apple.vphone.audiodext</string>
+            <!-- Match our synthetic UAC2 device's AudioControl interface (AppleUSBAudio kext is
+                 stripped from this build, so we are the only class-1 matcher). -->
+            <key>bInterfaceClass</key>           <integer>1</integer>
+            <key>bInterfaceSubClass</key>        <integer>1</integer>
+            <key>idVendor</key>                  <integer>1452</integer>
+            <key>idProduct</key>                 <integer>1809</integer>
+
+            <key>IOUserAudioDriverUserClientProperties</key>
+            <dict>
+                <key>IOClass</key>      <string>IOUserUserClient</string>
+                <key>IOUserClass</key>  <string>IOUserAudioDriverUserClient</string>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>

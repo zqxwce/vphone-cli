@@ -57,6 +57,7 @@ static NSString *TLExecutablePath(void) {
 // frameworks are actually loaded — they don't need per-daemon entries here.
 static NSString *const kVPhoneAllowedDaemonPaths[] = {
     @"/usr/libexec/cameracaptured",  // libvcamcaptured (Filter.Executables match)
+    @"/usr/libexec/audiomxd",        // libvphoneaudio (Filter.Executables match)
 };
 
 static BOOL TLShouldRunInCurrentProcess(void) {

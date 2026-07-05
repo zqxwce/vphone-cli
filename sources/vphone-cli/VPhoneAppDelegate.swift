@@ -14,6 +14,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private var locationProvider: VPhoneLocationProvider?
     private var hostControl: VPhoneHostControl?
     private var cameraServer: VPhoneCameraServer?
+    private var audioBridge: VPhoneAudioBridge?
     private var sigintSource: DispatchSourceSignal?
     private var didAttemptAutoInstall = false
 
@@ -95,6 +96,17 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             if let device = vm.virtualMachine.socketDevices.first as? VZVirtioSocketDevice {
                 control.connect(device: device)
                 camServer.connect(device: device)
+            }
+
+            // Audio bridge — EXP variant only, gated by --audio.
+            if options.audio && options.variant == .exp {
+                let audioBridge = VPhoneAudioBridge()
+                self.audioBridge = audioBridge
+                if let device = vm.virtualMachine.socketDevices.first as? VZVirtioSocketDevice {
+                    audioBridge.connect(device: device)
+                }
+            } else if options.audio {
+                print("[audio] --audio ignored: only supported on the EXP variant")
             }
         }
 

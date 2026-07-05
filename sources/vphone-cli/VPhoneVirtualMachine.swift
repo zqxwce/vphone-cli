@@ -37,6 +37,7 @@ class VPhoneVirtualMachine: NSObject, VZVirtualMachineDelegate {
         var kernelDebugPort: Int?
         var variant: Variant
         var noVphoned: Bool
+        var audio: Bool = false
     }
 
     private struct DeviceIdentity {

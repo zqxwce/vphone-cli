@@ -330,3 +330,14 @@ setup_logs/
 /research/xnu
 /vm
 /vm.backups
+/vm-jb
+
+# Local Claude Code config (personal settings + transient lock)
+.claude/
+
+# Absolute-path symlink into a machine-local skills checkout
+/skills/vphone
+
+# Transient / backup DB files
+*.db-journal
+*.db.bak

@@ -56,6 +56,9 @@ struct VPhoneBootCLI: ParsableCommand {
     @Flag(name: .customLong("no-vphoned"), help: "Exclude vphoned usage (patchless-only).")
     var noVphoned: Bool = false
 
+    @Flag(name: .customLong("audio"), help: "Enable guest⇄host audio bridge (EXP variant only).")
+    var audio: Bool = false
+
     @Option(
         name: .customLong("usb-passthrough"),
         parsing: .upToNextOption,
@@ -114,7 +117,8 @@ struct VPhoneBootCLI: ParsableCommand {
             screenScale: manifest.screenConfig.scale,
             kernelDebugPort: kernelDebugPort,
             variant: variant.virtualMachineVariant,
-            noVphoned: self.noVphoned
+            noVphoned: self.noVphoned,
+            audio: self.audio
         )
     }
 
