@@ -82,6 +82,11 @@ public final class FirmwarePipeline {
     let noVphoned: Bool
     let loader: any FirmwareLoader
 
+    /// Set when the iPhone base is iOS 18.x (read from iPhone-BuildManifest.plist).
+    /// Gates the EXC_GUARD kernel patch, which iOS 18 bases need but 26.x don't.
+    /// Computed in `patchAll()` before `buildComponentList()` runs.
+    private var iosBaseIs18 = false
+
     // MARK: - Init
 
     public init(
@@ -111,6 +116,13 @@ public final class FirmwarePipeline {
 
         log("[*] VM directory:      \(vmDirectory.path)")
         log("[*] Restore directory: \(restoreDir.path)")
+
+        // Detect the iPhone base iOS version (from the pre-hybrid manifest that
+        // fw_prepare preserves — the live BuildManifest.plist reads the cloudOS
+        // version, not the base). iOS 18 bases need the EXC_GUARD patch.
+        let baseVersion = Self.readBaseProductVersion(restoreDir)
+        iosBaseIs18 = baseVersion?.hasPrefix("18.") ?? false
+        log("[*] iPhone base iOS:   \(baseVersion ?? "unknown")\(iosBaseIs18 ? "  (enabling iOS-18 EXC_GUARD kernel patch)" : "")")
 
         let components = buildComponentList()
         log("[*] Patching \(components.count) boot-chain components ...")
@@ -179,6 +191,10 @@ public final class FirmwarePipeline {
     /// Build the ordered component list based on the variant.
     func buildComponentList() -> [ComponentDescriptor] {
         var components: [ComponentDescriptor] = []
+
+        // Captured by value into the patcher factory closures below (avoids
+        // capturing self). True only for iOS 18 bases; gates the EXC_GUARD patch.
+        let applyExcGuard = iosBaseIs18
 
         // 1. AVPBooter — always present, lives in VM root.
         //    Patched for every non-less variant (regular/dev/jb/exp).
@@ -277,7 +293,7 @@ public final class FirmwarePipeline {
                     []
                 case .regular:
                     [{ data, verbose in
-                        KernelPatcher(data: data, verbose: verbose, isDev: false)
+                        KernelPatcher(data: data, verbose: verbose, isDev: false, applyExcGuard: applyExcGuard)
                     }]
                 case .dev:
                     [{ data, verbose in
@@ -286,7 +302,7 @@ public final class FirmwarePipeline {
                 case .jb:
                     [
                         { data, verbose in
-                            KernelPatcher(data: data, verbose: verbose, isDev: false)
+                            KernelPatcher(data: data, verbose: verbose, isDev: false, applyExcGuard: applyExcGuard)
                         },
                         { data, verbose in
                             KernelJBPatcher(data: data, verbose: verbose)
@@ -295,7 +311,7 @@ public final class FirmwarePipeline {
                 case .exp:
                     [
                         { data, verbose in
-                            KernelPatcher(data: data, verbose: verbose, isDev: false)
+                            KernelPatcher(data: data, verbose: verbose, isDev: false, applyExcGuard: applyExcGuard)
                         },
                         { data, verbose in
                             KernelJBPatcher(data: data, verbose: verbose)
@@ -380,6 +396,20 @@ public final class FirmwarePipeline {
             throw PatcherError.fileNotFound("No *Restore* directory found in \(vmDirectory.path). Run prepare_firmware first.")
         }
         return restoreDir
+    }
+
+    /// Read the iPhone base `ProductVersion` from `iPhone-BuildManifest.plist`
+    /// (preserved by fw_prepare before the hybrid manifest overwrites
+    /// BuildManifest.plist). Returns nil if absent/unreadable — callers then
+    /// treat the base as non-iOS-18 (conservative).
+    static func readBaseProductVersion(_ restoreDir: URL) -> String? {
+        let url = restoreDir.appendingPathComponent("iPhone-BuildManifest.plist")
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any],
+              let version = dict["ProductVersion"] as? String
+        else { return nil }
+        return version
     }
 
     private func compareRestoreDirectories(_ lhs: URL, _ rhs: URL) -> Bool {

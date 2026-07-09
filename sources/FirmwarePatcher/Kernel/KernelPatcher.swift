@@ -15,9 +15,17 @@ public final class KernelPatcher: KernelPatcherBase, Patcher {
     /// When true, includes dev-only kernel patches (e.g. EXC_GUARD disable).
     public var isDev: Bool = false
 
-    public convenience init(data: Data, verbose: Bool = true, isDev: Bool) {
+    /// When true, apply the EXC_GUARD (Mach port guard) disable even on
+    /// non-dev variants. Set for iOS 18 bases: their older userland
+    /// (runningboardd/SpringBoard) trips a Mach port guard the 26.1 kernel
+    /// enforces fatally (EXC_GUARD, GUARD_TYPE_MACH_PORT "flavor 10"),
+    /// which crash-loops the UI. Scoped to iOS 18 bases so 26.x is unaffected.
+    public var applyExcGuard: Bool = false
+
+    public convenience init(data: Data, verbose: Bool = true, isDev: Bool, applyExcGuard: Bool = false) {
         self.init(data: data, verbose: verbose)
         self.isDev = isDev
+        self.applyExcGuard = applyExcGuard
     }
 
     // MARK: - Find All
@@ -44,9 +52,11 @@ public final class KernelPatcher: KernelPatcherBase, Patcher {
         patchApfsMount() // 13-15
         patchSandbox() // 16-25
 
-        // Dev-only patches (not applied to regular or JB variants)
-        if isDev {
-            patchExcGuardBehavior() // 26 (dev only)
+        // EXC_GUARD (Mach port guard) disable — applied on the dev variant
+        // always, and on any variant with an iOS 18 base (see applyExcGuard).
+        // Not applied to 26.x bases, which boot without it.
+        if isDev || applyExcGuard {
+            patchExcGuardBehavior() // 26
         }
 
         return patches
