@@ -298,6 +298,19 @@ if [[ "$IOS_VERSION" == 26.0* || "$IOS_VERSION" == 18.* ]]; then
     "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-iomfb-swapend "$DSC_DIR"
 fi
 
+# Newer userlands ship a dyld shared cache that nearly fills the vphone600 26.x
+# kernel's fixed 6 GiB shared region. The kernel reserves the cache's mapped span
+# PLUS the cache-header maxSlide (512 MiB); when that overflows 0x180000000 (iOS
+# 27.0: ~5.95 GiB span + 512 MiB), _shared_region_map_and_slide returns ENOMEM,
+# dyld cannot map libSystem, and launchd (pid 1) panics at boot. Zero maxSlide so
+# the cache maps at slide 0 within the region. Self-gating: no-op for older
+# userlands (26.x/18.x) that already fit with full slide.
+DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
+if [[ -d "$DSC_DIR" ]]; then
+    echo "  [*] Checking dyld cache maxSlide vs kernel shared region..."
+    "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-dsc-maxslide "$DSC_DIR"
+fi
+
 # ═══════════ 2/7 PATCH SEPUTIL ════════════════════════════════
 echo ""
 echo "[2/7] Patching seputil..."
