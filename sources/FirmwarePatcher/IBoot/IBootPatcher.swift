@@ -35,6 +35,14 @@ public class IBootPatcher: Patcher {
     public let component: String
     public let verbose: Bool
 
+    /// Extra boot-args token(s) inserted before the trailing `%s` in the
+    /// patched boot-args (ibec/llb). Used to add `if_attach_nx=0x3` on iOS 18
+    /// bases (disables the skywalk flowswitch netagents so Network.framework
+    /// uses the BSD path; the 26.1-kernel skywalk channel-create traps in the
+    /// 18.x Network.framework and crash-loops mDNSResponder → no DNS). Empty
+    /// by default, so 26.x bases keep the stock boot-args.
+    public var extraBootArgs: String = ""
+
     let buffer: BinaryBuffer
     let mode: Mode
     let disasm = ARM64Disassembler()
@@ -305,9 +313,17 @@ public class IBootPatcher: Patcher {
 
     // MARK: - 3. Boot-Args (iBEC / LLB)
 
+    /// Effective boot-args string, with any `extraBootArgs` inserted before `%s`.
+    private var effectiveBootArgs: String {
+        extraBootArgs.isEmpty
+            ? IBootPatcher.bootArgs
+            : "serial=3 -v debug=0x2014e \(extraBootArgs) %s"
+    }
+
     /// Redirect ADRP+ADD x2 to a custom boot-args string.
     /// Python: `patch_boot_args()`
-    func patchBootArgs(newArgs: String = IBootPatcher.bootArgs) {
+    func patchBootArgs(newArgs: String? = nil) {
+        let newArgs = newArgs ?? effectiveBootArgs
         guard let newArgsData = newArgs.data(using: .ascii) else { return }
 
         guard let fmtOff = findBootArgsFmt() else {
