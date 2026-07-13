@@ -44,6 +44,97 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Fetch mode (headless: pull guest files over vphoned, then exit)
+
+    @MainActor
+    private func startFetchMode(control: VPhoneControl) {
+        let paths = cli.fetch
+        let outDir = URL(fileURLWithPath: cli.fetchOut)
+        print("[fetch] awaiting vphoned to pull \(paths.count) path(s) -> \(outDir.path)")
+
+        let timeout = DispatchWorkItem {
+            print("[fetch] ERROR: vphoned did not connect within 180s; giving up")
+            exit(2)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 180, execute: timeout)
+
+        control.onConnect = { caps in
+            timeout.cancel()
+            Task { @MainActor in
+                print("[fetch] vphoned connected (caps: \(caps))")
+                guard caps.contains("file") else {
+                    print("[fetch] ERROR: guest vphoned lacks the 'file' capability")
+                    exit(3)
+                }
+                try? FileManager.default.createDirectory(
+                    at: outDir, withIntermediateDirectories: true
+                )
+                for p in paths {
+                    await Self.fetchGuestPath(control: control, guestPath: p, into: outDir)
+                }
+                print("[fetch] done -> \(outDir.path)")
+                exit(0)
+            }
+        }
+    }
+
+    /// Fetch a guest path (file or directory, recursive) into `hostBase`, preserving its basename.
+    @MainActor
+    private static func fetchGuestPath(
+        control: VPhoneControl, guestPath: String, into hostBase: URL
+    ) async {
+        let ns = guestPath as NSString
+        let parent = ns.deletingLastPathComponent.isEmpty ? "/" : ns.deletingLastPathComponent
+        let name = ns.lastPathComponent
+        // Determine type by listing the parent directory.
+        if let entries = try? await control.listFiles(path: parent),
+           let rf = entries.compactMap({ VPhoneRemoteFile(dir: parent, entry: $0) })
+               .first(where: { $0.name == name })
+        {
+            await fetchRemoteFile(control: control, file: rf, into: hostBase)
+        } else {
+            // Parent not listable (e.g. permission) — try a direct file download.
+            await downloadOne(control: control, guestPath: guestPath, name: name, into: hostBase)
+        }
+    }
+
+    @MainActor
+    private static func fetchRemoteFile(
+        control: VPhoneControl, file: VPhoneRemoteFile, into hostBase: URL
+    ) async {
+        if file.isDirectoryLike {
+            let localDir = hostBase.appendingPathComponent(file.name)
+            try? FileManager.default.createDirectory(
+                at: localDir, withIntermediateDirectories: true
+            )
+            guard let entries = try? await control.listFiles(path: file.path) else {
+                print("[fetch] WARN: could not list \(file.path)")
+                return
+            }
+            for e in entries {
+                if let child = VPhoneRemoteFile(dir: file.path, entry: e) {
+                    await fetchRemoteFile(control: control, file: child, into: localDir)
+                }
+            }
+        } else {
+            await downloadOne(control: control, guestPath: file.path, name: file.name, into: hostBase)
+        }
+    }
+
+    @MainActor
+    private static func downloadOne(
+        control: VPhoneControl, guestPath: String, name: String, into hostBase: URL
+    ) async {
+        do {
+            let data = try await control.downloadFile(path: guestPath)
+            let dest = hostBase.appendingPathComponent(name)
+            try data.write(to: dest)
+            print("[fetch] \(guestPath) -> \(dest.path) (\(data.count) bytes)")
+        } catch {
+            print("[fetch] FAILED \(guestPath): \(error)")
+        }
+    }
+
     @MainActor
     private func startVirtualMachine() async throws {
         let options = try cli.resolveOptions()
@@ -81,9 +172,13 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
         let control = VPhoneControl(variant: options.variant)
         self.control = control
         if !cli.dfu {
-            let vphonedURL = URL(fileURLWithPath: cli.vphonedBin)
-            if FileManager.default.fileExists(atPath: vphonedURL.path) {
-                control.guestBinaryURL = vphonedURL
+            // Fetch mode keeps vphoned as-installed: skip the auto-update, whose
+            // push+restart otherwise drops the connection right when we need it.
+            if cli.fetch.isEmpty {
+                let vphonedURL = URL(fileURLWithPath: cli.vphonedBin)
+                if FileManager.default.fileExists(atPath: vphonedURL.path) {
+                    control.guestBinaryURL = vphonedURL
+                }
             }
 
             let provider = VPhoneLocationProvider(control: control)
@@ -94,7 +189,13 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
 
             if let device = vm.virtualMachine.socketDevices.first as? VZVirtioSocketDevice {
                 control.connect(device: device)
-                camServer.connect(device: device)
+                if cli.fetch.isEmpty { camServer.connect(device: device) }
+            }
+
+            // Fetch mode: pull the requested guest paths once vphoned connects, then exit.
+            if !cli.fetch.isEmpty {
+                startFetchMode(control: control)
+                return
             }
         }
 

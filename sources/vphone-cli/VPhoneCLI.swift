@@ -56,9 +56,18 @@ struct VPhoneBootCLI: ParsableCommand {
     @Flag(name: .customLong("no-vphoned"), help: "Exclude vphoned usage (patchless-only).")
     var noVphoned: Bool = false
 
-    /// DFU mode runs headless (no GUI).
+    @Option(
+        name: .customLong("fetch"),
+        help: "Guest path(s) to download over vphoned after the control channel connects, then exit (repeatable; file or directory, recursive). Runs headless and disables vphoned auto-update so the connection stays up — useful for pulling crash reports / logs off a VM that boots but stalls."
+    )
+    var fetch: [String] = []
+
+    @Option(name: .customLong("fetch-out"), help: "Host directory for --fetch downloads (default: fetched).")
+    var fetchOut: String = "fetched"
+
+    /// DFU and fetch modes run headless (no GUI).
     var noGraphics: Bool {
-        dfu
+        dfu || !fetch.isEmpty
     }
 
     var installPackageURL: URL? {
