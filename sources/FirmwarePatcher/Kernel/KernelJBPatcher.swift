@@ -49,6 +49,13 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         patchKcall10()
         patchSyscallmaskApplyToProc()
 
+        // Neutralize the exec-time ip_mac_return SECURITY_POLICY kill so a userland
+        // newer than the kernel (iOS 27 on the 26.4 kernel) can launch: AMFI's exec
+        // hooks reject the newer binaries' validation category → ip_mac_return != 0 →
+        // core daemons (backboardd, cfprefsd, ...) die at exec → boot deadlock.
+        // No-op-in-effect for version-matched userlands (ip_mac_return == 0 there).
+        patchExecSecurityPolicyKill()
+
         return patches
     }
 
