@@ -160,11 +160,16 @@ def main():
 
     elif cmd == "patch-iomfb-swapend":
         if len(sys.argv) < 3:
-            print("Usage: patch_cfw.py patch-iomfb-swapend <chunks_dir> [--dry-run]")
+            print("Usage: patch_cfw.py patch-iomfb-swapend <chunks_dir> "
+                  "[--target-size <hex|int>] [--dry-run]")
             sys.exit(1)
         dry_run = "--dry-run" in sys.argv[3:]
+        kwargs = {}
+        if "--target-size" in sys.argv:
+            i = sys.argv.index("--target-size")
+            kwargs["target_size"] = int(sys.argv[i + 1], 0)
         try:
-            patch_iomfb_swapend(sys.argv[2], dry_run=dry_run)
+            patch_iomfb_swapend(sys.argv[2], dry_run=dry_run, **kwargs)
         except ValueError as e:
             print(f"[-] {e}")
             sys.exit(1)
