@@ -65,33 +65,27 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         patchKcall10()
         patchSyscallmaskApplyToProc()
 
-        // Neutralize the exec-time ip_mac_return SECURITY_POLICY kill so a userland
-        // newer than the kernel (iOS 27 on the 26.4 kernel) can launch: AMFI's exec
-        // hooks reject the newer binaries' validation category → ip_mac_return != 0 →
-        // core daemons (backboardd, cfprefsd, ...) die at exec → boot deadlock.
-        // No-op-in-effect for version-matched userlands (ip_mac_return == 0 there).
-        patchExecSecurityPolicyKill()
-
-        // iOS 27 VZ-view (host paravirt-GPU scanout) fix — kernel half of the
-        // "force the kern present path" pair:
-        //
-        // The 26.4 kernel's paravirt GPU only scans a frame out to the host when
-        // the guest presents via the IOMFB userclient SwapEnd (external method 5).
-        // iOS 27 defaults the paravirt display's present to IOMFB's parallel
-        // `_virt_*` path (an in-process callback that never enters the userclient),
-        // so the paravirt GPU never scans out → host VZ window is black (the guest
-        // still composites; visible over in-guest TrollVNC). cfw_patch_iomfb_force_kern
-        // (userland half) retargets IOMFB's public `_IOMobileFramebufferSwap*`
-        // trampolines to `_kern_Swap*`, forcing present back onto method 5. But
-        // iOS 27's native SwapEnd struct is 0x6e0 bytes (26.x sent 0x588), and the
-        // 26.4 userclient exact-checks 0x588 in TWO places, so method 5 would return
-        // kIOReturnBadArgument. These two patches relax both size gates to accept
-        // 27's 0x6e0 (its IOMFBSwapRec prefix matches 26.x, so the paravirt swap
-        // handler reads valid fields):
-        //  1. dispatch-table checkStructureInputSize 0x588 → variable
-        patchIomfbSwapEndVariableSize()
-        //  2. the handler's internal `cmp w2,#0x588` gate → 0x6e0
-        patchIomfbSwapEndHandlerSize()
+        // iOS-27-only (gated — a 26.x base skips these entirely). All target a 27
+        // userland on the 26.4 kernel and are unnecessary or actively harmful on 26.x:
+        //  - exec ip_mac_return SECURITY_POLICY kill bypass: AMFI's exec hooks reject a
+        //    userland newer than the kernel (27 binaries' validation category) →
+        //    ip_mac_return != 0 → core daemons die at exec → boot deadlock. 26.x
+        //    binaries pass (ip_mac_return == 0), so it is not needed there.
+        //  - container-manager exec-upcall force-success: iOS 27 deleted the kernel-side
+        //    containermanagerd upcall, so on the 26.4 kernel it fails for every 27 app →
+        //    autoboxed into temporary-sandbox → Campo/intelligencetasksd/feedbackd
+        //    crash-loop. On 26.x the upcall succeeds, so it is not needed.
+        //  - IOMFB SwapEnd size gates: 27's force-kern present (cfw_patch_iomfb_force_kern)
+        //    sends a 0x6e0 SwapEnd struct; the 26.4 userclient exact-checks 0x588 in two
+        //    places, so both gates are relaxed to accept 0x6e0. HARMFUL on 26.x — it
+        //    sends the native 0x588, which the retargeted handler gate would then reject
+        //    → every framebuffer swap fails → dead display (the 26.5 regression).
+        if applyIOS27 {
+            patchExecSecurityPolicyKill()
+            patchContainerManagerUpcall()
+            patchIomfbSwapEndVariableSize()      // dispatch checkStructureInputSize → variable
+            patchIomfbSwapEndHandlerSize()       // handler cmp w2,#0x588 → 0x6e0
+        }
 
         return patches
     }
