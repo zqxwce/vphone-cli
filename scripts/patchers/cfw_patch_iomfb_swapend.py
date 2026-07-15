@@ -1,27 +1,41 @@
-"""Patch iOS 26.0 and 26.0.1 IOMobileFramebuffer SwapEnd payload size.
+"""Patch IOMobileFramebuffer SwapEnd payload size to match the base kernel.
 
-The PCC vphone600 26.1 kernel-side IOMobileFramebuffer external method 5
-expects the newer 0x560-byte swap state. iOS 26.0 and 26.0.1 userland send a
-smaller state (0x548), so SwapEnd returns kIOReturnBadArgument and the VM
-display stays black.
+The SwapEnd input-state size is enforced kernel-side: the PCC vphone600
+kernel's IOMobileFramebufferUserClient external method 5 (SwapEnd /
+swap_submit) does an exact `checkStructureInputSize` check. A userland whose
+`_kern_SwapEnd` sends a different size gets kIOReturnBadArgument, so no frame
+is presented and the host VZ display stays black (the guest still renders —
+the Apple logo is visible over VNC, just not in the vphone-cli view).
+
+The accepted size is a property of the BASE KERNEL, not the userland:
+  - 26.1 base (older): userclient expects 0x560.
+  - 26.4 base (xnu-12377, current): userclient expects 0x588. Confirmed two
+    ways: the sole dispatch-shaped entry in kernelcache.*.vphone600 with
+    checkStructureInputSize==0x588 (scalarIn=0, scalarOut=0, structOut=0,
+    preceded by a ptrauth code ptr), and empirically — native 26.5 userland
+    sends 0x588 and displays correctly on this stack.
+
+Known userland-sent sizes: 18.6.2 -> 0x514, 26.0/26.0.1 -> 0x548,
+26.5 -> 0x588 (native match on 26.4), 27.0 (24A5380h) -> 0x6e0.
 
 `_kern_SwapEnd` sets up an external-method-5 call:
 
     ldr w0, [x0,#0x14]
     add x2, x19,#0x18
     mov w1,#5          <- external method selector 5
-    mov w3,#<size>     <- input-state size  (0x548 on 26.0; 0x588 on 26.5)
+    mov w3,#<size>     <- input-state size (source; version-specific)
     mov x4,#0
     mov x5,#0
     bl  _io_connect_method
 
-The `mov w3,#<size>` immediate is what this patcher rewrites to 0x560, the
-size the 26.1 userclient accepts. The site is located dynamically: resolve
-`_kern_SwapEnd`, disassemble it with Capstone, and anchor on the semantic
-call-setup shape (selector `mov w1,#5` then `mov w3,#imm` then the zeroed
-`mov x4,#0`/`mov x5,#0` and the `bl`). Nothing about the source size is
-hardcoded, so this fires on 26.0 and 26.0.1 alike; the replacement immediate
-comes from the Keystone-backed `asm()` helper.
+The `mov w3,#<size>` immediate is what this patcher rewrites to the target
+size (default 0x588 for the 26.4 base; override via `target_size`). The site
+is located dynamically: resolve `_kern_SwapEnd`, disassemble it with Capstone,
+and anchor on the semantic call-setup shape (selector `mov w1,#5` then
+`mov w3,#imm` then the zeroed `mov x4,#0`/`mov x5,#0` and the `bl`). Nothing
+about the source size is hardcoded — it is discovered, never matched — so this
+fires on any userland; the replacement immediate comes from the
+Keystone-backed `asm()` helper.
 """
 
 import os
@@ -44,11 +58,13 @@ except ImportError:  # direct self-test execution
 IOMFB = "/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer"
 SWAPEND_SYMBOL = "_kern_SwapEnd"
 
-# External-method selector for SwapEnd, and the input-state size the 26.1
-# vphone600 userclient accepts. TARGET_SIZE is the semantic goal, not an
-# anchor — the source immediate (0x548 on 26.0) is discovered, never matched.
+# External-method selector for SwapEnd, and the input-state size the 26.4
+# vphone600 userclient accepts (checkStructureInputSize). TARGET_SIZE is the
+# semantic goal, not an anchor — the source immediate (e.g. 0x6e0 on 27.0) is
+# discovered, never matched. Override via patch_iomfb_swapend(target_size=...)
+# when building against a different base kernel (26.1 base wants 0x560).
 SWAPEND_SELECTOR = 5
-TARGET_SIZE = 0x560
+TARGET_SIZE = 0x588
 
 
 def _resolve_symbol(dsc_path, image, symbol):
@@ -114,7 +130,8 @@ def _find_swap_size_insn(insns):
     return None
 
 
-def patch_iomfb_swapend(chunks_dir, *, dsc_path=None, dry_run=False):
+def patch_iomfb_swapend(chunks_dir, *, dsc_path=None, target_size=TARGET_SIZE,
+                        dry_run=False):
     chunks = DSCChunks(chunks_dir)
     print(f"  [.] {chunks!r}")
 
@@ -134,17 +151,17 @@ def patch_iomfb_swapend(chunks_dir, *, dsc_path=None, dry_run=False):
 
     _reg, cur_size = _mov_reg_imm(target)
     insn_vma = target.address
-    new_bytes = asm(f"mov w3, #{TARGET_SIZE}")
+    new_bytes = asm(f"mov w3, #{target_size}")
     if len(new_bytes) != 4:
         raise RuntimeError(f"expected 4 bytes, got {len(new_bytes)}")
 
-    if cur_size == TARGET_SIZE:
-        print(f"      [=] already 0x{TARGET_SIZE:X} at 0x{insn_vma:X}; "
+    if cur_size == target_size:
+        print(f"      [=] already 0x{target_size:X} at 0x{insn_vma:X}; "
               f"re-attesting page only")
     else:
         action = "would patch" if dry_run else "patched"
         print(f"      [+] {action} {IOMFB} {SWAPEND_SYMBOL} size "
-              f"0x{cur_size:X} -> 0x{TARGET_SIZE:X} at 0x{insn_vma:X}")
+              f"0x{cur_size:X} -> 0x{target_size:X} at 0x{insn_vma:X}")
         if not dry_run:
             chunks.write_at_vma(insn_vma, new_bytes)
 
@@ -178,7 +195,8 @@ def _self_test():
     reg, imm = _mov_reg_imm(target)
     assert (reg, imm) == ("w3", 0x548), (reg, hex(imm))
     assert target.address == 0x1000 + 12, hex(target.address)
-    assert asm(f"mov w3, #{TARGET_SIZE}") == bytes.fromhex("03ac8052")
+    assert TARGET_SIZE == 0x588, hex(TARGET_SIZE)
+    assert asm(f"mov w3, #{TARGET_SIZE}") == bytes.fromhex("03b18052")
     print("self-test OK")
 
 

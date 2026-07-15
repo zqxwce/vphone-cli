@@ -24,6 +24,13 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         patchTaskConversionEvalInternal()
         patchSandboxHooksExtended()
         patchIoucFailedMacf()
+        // iOS 27 userland on the 26.4 kernel: the IOKit user-client open path's
+        // Sandbox gate (separate from the MACF gate above) spuriously denies the
+        // render server (backboardd) its IOMobileFramebuffer/IOSurface/HID user
+        // clients → no present (no Apple logo) + nil main display (SpringBoard
+        // crash-loop). Bypass it, mirroring the MACF gate. No-op where the gate
+        // already allows (native 26.x userlands).
+        patchIoucFailedSandbox()
 
         // Group B
         patchPostValidationAdditional()
@@ -55,6 +62,30 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         // core daemons (backboardd, cfprefsd, ...) die at exec → boot deadlock.
         // No-op-in-effect for version-matched userlands (ip_mac_return == 0 there).
         patchExecSecurityPolicyKill()
+
+        // DISABLED (kept off): these three were an earlier, WRONG theory that the
+        // iOS-27 black screen was an IOMFB SwapEnd size/struct ABI issue. Root
+        // cause is actually the IOUC *sandbox* gate denying backboardd the
+        // framebuffer — fixed by patchIoucFailedSandbox() above. Leave these off:
+        //  - patchParavirtDisplayPrimary sets the display's "primary" property=1,
+        //    which iOS 27 turns into the device NAME suffix ("primary-1"), which
+        //    then fails the render server's exact name match → HARMFUL.
+        //  - the SwapEnd patches target a present path iOS 27 never takes (method
+        //    5 is never called) and would break 26.x's native 0x588 SwapEnd.
+        //
+        // Publish the VM's single paravirt display as primary=1 so iOS 27's
+        // FBSDisplayMonitor finds a main display (else SpringBoard crash-loops on a
+        // nil mainDisplay assertion → black screen). Harmless for iOS 26.x bases.
+        // patchParavirtDisplayPrimary()
+
+        // Accept iOS 27's native 0x6e0 IOMFBSwapRec (variable-size dispatch)
+        // instead of truncating userland to 0x588 (which misaligns 27's layout).
+        // Paired with leaving iOS 27 userland at native size (cfw_install gate).
+        // patchIomfbSwapEndVariableSize()
+        // The handler has a SECOND internal exact-size gate (cmp w2,#0x588) beyond
+        // the dispatch check; retarget it to iOS 27's 0x6e0 so the native struct
+        // reaches the real swap processing.
+        // patchIomfbSwapEndHandlerSize()
 
         return patches
     }

@@ -283,19 +283,38 @@ else
     echo "  [+] Cryptex installed"
 fi
 
-# Some userland versions send an IOMobileFramebuffer SwapEnd state smaller than
-# the 26.1-era 0x560 the PCC vphone600 userclient expects, so SwapEnd returns
-# kIOReturnBadArgument and the host VZ display stays black (guest still renders;
-# visible over VNC). Known: 26.0/26.0.1 send 0x548, 18.x sends 0x514 (18.6.2).
-# Patch only that immediate in the installed DSC; do not replace frameworks or
-# normalize GPU metadata. The patcher is semantic + idempotent (rewrites the
-# SwapEnd size to 0x560, no-op if already 0x560).
+# Some userland versions send an IOMobileFramebuffer SwapEnd state whose size
+# differs from what the PCC vphone600 userclient expects (an exact
+# checkStructureInputSize check), so SwapEnd returns kIOReturnBadArgument and
+# the host VZ display stays black (guest still renders; visible over VNC).
+#
+# The accepted size is a property of the BASE KERNEL, not the userland:
+#   - 26.1 base: userclient expects 0x560
+#   - 26.4 base (xnu-12377, current): userclient expects 0x588
+# Reliably reading it from the kernelcache needs the IOMFB userclient dispatch
+# table (a blind shape-scan is ambiguous — 8 candidates), so until that dynamic
+# detection lands we key the target off the userland version as a proxy for the
+# validated base pairing:
+#   - 27.x runs on the 26.4 base           -> 0x588
+#   - 26.0/26.0.1 and 18.x validated on 26.1 base -> 0x560
+# Known userland-sent sizes: 18.x -> 0x514, 26.0/26.0.1 -> 0x548, 27.0 -> 0x6e0.
+# Patch only that immediate in the installed DSC; the patcher is semantic +
+# idempotent (rewrites the SwapEnd size to the target, no-op if already there).
+# NOTE: iOS 27 is intentionally NOT truncated here — its swap struct (0x6e0) has
+# a new layout, so size-truncation to 0x588 feeds the kernel misaligned data.
+# Instead the JB kernel patch `patchIomfbSwapEndVariableSize` makes the userclient
+# accept iOS 27's native 0x6e0 struct (variable-size dispatch), so 27 must send
+# its native size — leave it unpatched here.
 IOS_VERSION=$(/usr/bin/plutil -extract ProductVersion raw -o - "$MNT1/System/Library/CoreServices/SystemVersion.plist" 2>/dev/null || true)
-if [[ "$IOS_VERSION" == 26.0* || "$IOS_VERSION" == 18.* ]]; then
-    echo "  [*] Patching IOMobileFramebuffer SwapEnd payload size (iOS $IOS_VERSION -> 0x560)..."
+IOMFB_TARGET=""
+case "$IOS_VERSION" in
+    26.0*|18.*) IOMFB_TARGET=0x560 ;;
+esac
+if [[ -n "$IOMFB_TARGET" ]]; then
+    echo "  [*] Patching IOMobileFramebuffer SwapEnd payload size (iOS $IOS_VERSION -> $IOMFB_TARGET)..."
     DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
     [[ -d "$DSC_DIR" ]] || die "dyld cache dir missing: $DSC_DIR"
-    "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-iomfb-swapend "$DSC_DIR"
+    "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-iomfb-swapend "$DSC_DIR" --target-size "$IOMFB_TARGET"
 fi
 
 # Newer userlands ship a dyld shared cache that nearly fills the vphone600 26.x
