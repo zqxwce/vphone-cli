@@ -72,29 +72,26 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         // No-op-in-effect for version-matched userlands (ip_mac_return == 0 there).
         patchExecSecurityPolicyKill()
 
-        // DISABLED (kept off): these three were an earlier, WRONG theory that the
-        // iOS-27 black screen was an IOMFB SwapEnd size/struct ABI issue. Root
-        // cause is actually the IOUC *sandbox* gate denying backboardd the
-        // framebuffer — fixed by patchIoucFailedSandbox() above. Leave these off:
-        //  - patchParavirtDisplayPrimary sets the display's "primary" property=1,
-        //    which iOS 27 turns into the device NAME suffix ("primary-1"), which
-        //    then fails the render server's exact name match → HARMFUL.
-        //  - the SwapEnd patches target a present path iOS 27 never takes (method
-        //    5 is never called) and would break 26.x's native 0x588 SwapEnd.
+        // iOS 27 VZ-view (host paravirt-GPU scanout) fix — kernel half of the
+        // "force the kern present path" pair:
         //
-        // Publish the VM's single paravirt display as primary=1 so iOS 27's
-        // FBSDisplayMonitor finds a main display (else SpringBoard crash-loops on a
-        // nil mainDisplay assertion → black screen). Harmless for iOS 26.x bases.
-        // patchParavirtDisplayPrimary()
-
-        // Accept iOS 27's native 0x6e0 IOMFBSwapRec (variable-size dispatch)
-        // instead of truncating userland to 0x588 (which misaligns 27's layout).
-        // Paired with leaving iOS 27 userland at native size (cfw_install gate).
-        // patchIomfbSwapEndVariableSize()
-        // The handler has a SECOND internal exact-size gate (cmp w2,#0x588) beyond
-        // the dispatch check; retarget it to iOS 27's 0x6e0 so the native struct
-        // reaches the real swap processing.
-        // patchIomfbSwapEndHandlerSize()
+        // The 26.4 kernel's paravirt GPU only scans a frame out to the host when
+        // the guest presents via the IOMFB userclient SwapEnd (external method 5).
+        // iOS 27 defaults the paravirt display's present to IOMFB's parallel
+        // `_virt_*` path (an in-process callback that never enters the userclient),
+        // so the paravirt GPU never scans out → host VZ window is black (the guest
+        // still composites; visible over in-guest TrollVNC). cfw_patch_iomfb_force_kern
+        // (userland half) retargets IOMFB's public `_IOMobileFramebufferSwap*`
+        // trampolines to `_kern_Swap*`, forcing present back onto method 5. But
+        // iOS 27's native SwapEnd struct is 0x6e0 bytes (26.x sent 0x588), and the
+        // 26.4 userclient exact-checks 0x588 in TWO places, so method 5 would return
+        // kIOReturnBadArgument. These two patches relax both size gates to accept
+        // 27's 0x6e0 (its IOMFBSwapRec prefix matches 26.x, so the paravirt swap
+        // handler reads valid fields):
+        //  1. dispatch-table checkStructureInputSize 0x588 → variable
+        patchIomfbSwapEndVariableSize()
+        //  2. the handler's internal `cmp w2,#0x588` gate → 0x6e0
+        patchIomfbSwapEndHandlerSize()
 
         return patches
     }

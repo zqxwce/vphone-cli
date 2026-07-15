@@ -34,6 +34,15 @@ Commands:
         payload size from 0x548 to 0x560 for the PCC vphone600 userclient,
         then re-attest the modified DSC page hash.
 
+    patch-iomfb-force-kern <chunks_dir> [--dry-run]
+        iOS 27 VZ-view fix: retarget IOMobileFramebuffer's public
+        _IOMobileFramebufferSwap* dispatch trampolines to their _kern_Swap*
+        siblings, forcing present onto the userclient method-5 path the 26.4
+        paravirt GPU scans out to the host (27 defaults to the _virt_* callback
+        path the paravirt GPU never receives). Re-attests modified DSC pages.
+        Pairs with the KernelJBPatchIomfbSwap kernel patches (accept 27's 0x6e0
+        SwapEnd struct).
+
     patch-dsc-maxslide <chunks_dir> [--dry-run]
         Zero the dyld_cache_header maxSlide when the userland cache would overflow
         the vphone600 26.x kernel's 6 GiB shared region (cache span + maxSlide >
@@ -90,6 +99,7 @@ if __name__ == "__main__":
     from patchers.cfw_patch_jetsam import patch_launchd_jetsam
     from patchers.cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
     from patchers.cfw_patch_iomfb_swapend import patch_iomfb_swapend
+    from patchers.cfw_patch_iomfb_force_kern import patch_iomfb_force_kern
     from patchers.cfw_patch_dsc_maxslide import patch_dsc_maxslide
     from patchers.cfw_patch_camera_dsc import apply_all_camera_patches
     from patchers.cfw_patch_watchdogd import patch_watchdogd
@@ -101,6 +111,7 @@ else:
     from .cfw_patch_jetsam import patch_launchd_jetsam
     from .cfw_patch_hv_vmm_dsc import patch_hv_vmm_in_dsc
     from .cfw_patch_iomfb_swapend import patch_iomfb_swapend
+    from .cfw_patch_iomfb_force_kern import patch_iomfb_force_kern
     from .cfw_patch_dsc_maxslide import patch_dsc_maxslide
     from .cfw_patch_camera_dsc import apply_all_camera_patches
     from .cfw_patch_watchdogd import patch_watchdogd
@@ -175,6 +186,18 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
+    elif cmd == "patch-iomfb-force-kern":
+        if len(sys.argv) < 3:
+            print("Usage: patch_cfw.py patch-iomfb-force-kern <chunks_dir> [--dry-run]")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv[3:]
+        try:
+            patch_iomfb_force_kern(sys.argv[2], dry_run=dry_run)
+        except ValueError as e:
+            print(f"[-] {e}")
+            sys.exit(1)
+        sys.exit(0)
+
     elif cmd == "patch-dsc-maxslide":
         if len(sys.argv) < 3:
             print("Usage: patch_cfw.py patch-dsc-maxslide <chunks_dir> [--dry-run]")
@@ -244,7 +267,7 @@ def main():
         print(f"Unknown command: {cmd}")
         print("Commands: cryptex-paths, patch-seputil, patch-launchd-cache-loader, patch-camera-dsc,")
         print("          patch-mobileactivationd, patch-launchd-jetsam,")
-        print("          patch-hv-vmm-dsc, patch-iomfb-swapend, patch-dsc-maxslide, patch-watchdogd,")
+        print("          patch-hv-vmm-dsc, patch-iomfb-swapend, patch-iomfb-force-kern, patch-dsc-maxslide, patch-watchdogd,")
         print("          inject-daemons, patch-dropbear-plist, inject-dylib")
         sys.exit(1)
 
