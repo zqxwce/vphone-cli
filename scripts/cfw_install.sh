@@ -340,6 +340,11 @@ if [[ -d "$DSC_DIR" ]]; then
     "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-dsc-maxslide "$DSC_DIR"
 fi
 
+# NOTE: the iOS 27 containermanagerd host-special-port-25 fix runs LATER, right after
+# the launchd daemon injection finalizes the launchd cache (search "Registering
+# containermanagerd") — it must patch the FINAL cache, not be clobbered by the
+# inject-daemons rebuild-from-.bak.
+
 # ═══════════ 2/7 PATCH SEPUTIL ════════════════════════════════
 echo ""
 echo "[2/7] Patching seputil..."
@@ -506,6 +511,22 @@ cp -R "$TEMP_DIR/launchd.plist" "$MNT1/System/Library/xpc/launchd.plist"
 /bin/chmod 0644 $MNT1/System/Library/xpc/launchd.plist
 
 echo "  [+] LaunchDaemons installed"
+
+# iOS 27 temporary-sandbox / broken-wallpaper (Campo crash-loop) — NO cache edit here.
+# The intuitive fix (restore the host-special-port-25 container upcall that 27 dropped
+# from the com.apple.containermanagerd AGENT job) is a CONFIRMED DEAD END on the 26.4
+# kernel + 27 userland: claiming port 25 (on EITHER the agent or the .system instance)
+# FREEZES the boot. With port 25 unclaimed (27 default) the 26.4 kernel's
+# container_manager_get_process_containers() upcall fails fast (MACH_SEND_INVALID_DEST)
+# and falls back to temporary-sandbox → boots (wallpaper broken). With port 25 claimed,
+# the kernel SENDS the synchronous upcall and blocks for a reply, but 27's
+# containermanagerd does not implement the 26.4 kernel's upcall protocol and never
+# replies → early-boot thread deadlocks → SpringBoard never comes up. Verified by
+# controlled boots (2026-07-15): pristine 27 cache connects in ~10 vphoned retries;
+# adding {HostSpecialPort:25} hangs at 100+ retries and never connects. The correct fix
+# must be kernel-side (handle the absent/failed upcall without temporary-sandbox) or in
+# per-app container resolution — NOT a launchd-cache edit. See
+# research/0_binary_patch_comparison.md for the full writeup.
 
 # ═══════════ CLEANUP ═════════════════════════════════════════
 echo ""

@@ -63,6 +63,16 @@ public final class KernelJBPatcher: KernelJBPatcherBase, Patcher {
         // No-op-in-effect for version-matched userlands (ip_mac_return == 0 there).
         patchExecSecurityPolicyKill()
 
+        // Force the sandbox exec-time container-manager upcall onto its success path.
+        // iOS 27 deleted the kernel-side containermanagerd upcall (no HOST_CONTAINERD_PORT
+        // / CM_KERN_* in the stock 27 kernel), so on the 26.4 kernel the upcall fails for
+        // every 27 platform app → they are autoboxed into `temporary-sandbox`, which denies
+        // backboard.display.services → Campo (wallpaper) crash-loops, + intelligencetasksd/
+        // feedbackd. Flip the `cbz w0,<success>` guard to `b <success>` so a failed upcall
+        // takes the success path instead of autobox/kill. No-op-in-effect for version-matched
+        // userlands (there the upcall succeeds, so cbz already branches to <success>).
+        patchContainerManagerUpcall()
+
         // DISABLED (kept off): patchParavirtDisplayPrimary was a wrong theory —
         // setting the display's "primary" property=1 makes iOS 27 append it as the
         // device NAME suffix ("primary-1"), which then fails the render server's
