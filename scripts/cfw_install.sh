@@ -300,22 +300,32 @@ fi
 # Known userland-sent sizes: 18.x -> 0x514, 26.0/26.0.1 -> 0x548, 27.0 -> 0x6e0.
 # Patch only that immediate in the installed DSC; the patcher is semantic +
 # idempotent (rewrites the SwapEnd size to the target, no-op if already there).
-# NOTE: iOS 27 is intentionally NOT truncated here — its swap struct (0x6e0) has
-# a new layout, so size-truncation to 0x588 feeds the kernel misaligned data.
-# Instead the JB kernel patch `patchIomfbSwapEndVariableSize` makes the userclient
-# accept iOS 27's native 0x6e0 struct (variable-size dispatch), so 27 must send
-# its native size — leave it unpatched here.
+# NOTE: iOS 27 is NOT handled by the size-truncation path — its swap struct
+# (0x6e0) has a new layout, and more fundamentally 27 defaults the paravirt
+# display's present to IOMFB's `_virt_*` callback path, which never enters the
+# userclient at all (method 5 is never called), so no size change would help.
+# iOS 27 instead gets `patch-iomfb-force-kern` below, which retargets IOMFB's
+# public Swap* trampolines to their `_kern_*` (method-5) siblings — the path the
+# 26.4 paravirt GPU scans out to the host — paired with the KernelJBPatchIomfbSwap
+# kernel patches that make the userclient accept 27's native 0x6e0 struct.
 IOS_VERSION=$(/usr/bin/plutil -extract ProductVersion raw -o - "$MNT1/System/Library/CoreServices/SystemVersion.plist" 2>/dev/null || true)
+DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
 IOMFB_TARGET=""
 case "$IOS_VERSION" in
     26.0*|18.*) IOMFB_TARGET=0x560 ;;
 esac
 if [[ -n "$IOMFB_TARGET" ]]; then
     echo "  [*] Patching IOMobileFramebuffer SwapEnd payload size (iOS $IOS_VERSION -> $IOMFB_TARGET)..."
-    DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
     [[ -d "$DSC_DIR" ]] || die "dyld cache dir missing: $DSC_DIR"
     "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-iomfb-swapend "$DSC_DIR" --target-size "$IOMFB_TARGET"
 fi
+case "$IOS_VERSION" in
+    27.*)
+        echo "  [*] Forcing IOMobileFramebuffer present onto the kern (method-5) path (iOS $IOS_VERSION)..."
+        [[ -d "$DSC_DIR" ]] || die "dyld cache dir missing: $DSC_DIR"
+        "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-iomfb-force-kern "$DSC_DIR"
+        ;;
+esac
 
 # Newer userlands ship a dyld shared cache that nearly fills the vphone600 26.x
 # kernel's fixed 6 GiB shared region. The kernel reserves the cache's mapped span
