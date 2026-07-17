@@ -267,6 +267,20 @@ fi
 uicache -a 2>/dev/null || true
 log "  uicache refreshed"
 
+# iOS 27: -[LSApplicationWorkspace registerApplicationDictionary:] (what uicache -a
+# uses) is a deprecated no-op stub on 27, so uicache cannot register JB apps. Register
+# them via the containerized LS API instead (needs the lsd embedded-reg gate patch from
+# cfw_patch_lsd_embedded_reg). The 27 gate is the /cores/vpregister PRESENCE: it is
+# deployed only on a 27 base (cfw_install_jb.sh gates the deploy on the mounted
+# SystemVersion.plist), so a 26.x/18.x base has no /cores/vpregister and skips this.
+# Do NOT re-add a guest-side `sw_vers` version check here — the hybrid guest's sw_vers
+# does not reliably report the 27 userland version at first boot, which silently
+# skipped this step and left Sileo unregistered.
+if [ -x /cores/vpregister ]; then
+    log "  Registering JB apps via containerized LS API (iOS 27 path)..."
+    /cores/vpregister 2>&1 | while IFS= read -r vpr_line; do log "    $vpr_line"; done
+fi
+
 # ═══════════ 8/8 SHELL PROFILES FOR SSH ═══════════════════════
 log "[8/8] Setting up shell profiles for SSH..."
 # .bashrc  — non-login interactive shells (dropbear default)
