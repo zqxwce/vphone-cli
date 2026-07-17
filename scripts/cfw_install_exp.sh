@@ -203,6 +203,34 @@ build_tweakloader() {
     echo "$out"
 }
 
+# Build vpregister — registers JB apps via the containerized LaunchServices API on
+# iOS 27, where -[LSApplicationWorkspace registerApplicationDictionary:] (uicache -a)
+# is a deprecated no-op stub. Needs the lsd embedded-reg gate patch
+# (cfw_patch_lsd_embedded_reg, applied by cfw_install.sh). Deployed to /cores and
+# invoked by vphone_jb_setup.sh at first boot.
+build_vpregister() {
+    local src="$SCRIPT_DIR/vpregister/vpregister.m"
+    local out="$TEMP_DIR/vpregister"
+    local sdk cc
+
+    [[ -f "$src" ]] || die "Missing vpregister source at $src"
+
+    sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+    cc="$(xcrun --sdk iphoneos -f clang)"
+
+    "$cc" -isysroot "$sdk" \
+        -arch arm64e \
+        -miphoneos-version-min=15.0 \
+        -fobjc-arc -Os \
+        -framework Foundation \
+        -Wl,-undefined,dynamic_lookup \
+        -o "$out" \
+        "$src"
+
+    ldid_sign_ent "$out" "$SCRIPT_DIR/vphoned/entitlements.plist"
+    echo "$out"
+}
+
 # Builds the libvcamcaptured.dylib injected into /usr/libexec/cameracaptured
 # via the TweakLoader allowlist. Output goes to TEMP_DIR; caller copies the
 # binary + companion plist to procursus/Library/MobileSubstrate/DynamicLibraries.
@@ -612,6 +640,14 @@ if [[ -f "$SETUP_SCRIPT" ]]; then
     cp -R "$SETUP_SCRIPT" "$MNT1/cores/vphone_jb_setup.sh"
     /bin/chmod 0755 $MNT1/cores/vphone_jb_setup.sh
     echo "  [+] vphone_jb_setup.sh -> /cores/"
+fi
+# vpregister: registers JB apps via the containerized LS API at first boot
+# (uicache -a's registerApplicationDictionary is a deprecated no-op on iOS 27).
+VPREGISTER="$(build_vpregister)"
+if [[ -f "$VPREGISTER" ]]; then
+    cp -R "$VPREGISTER" "$MNT1/cores/vpregister"
+    /bin/chmod 0755 $MNT1/cores/vpregister
+    echo "  [+] vpregister -> /cores/"
 fi
 if [[ -f "$SETUP_PLIST" ]]; then
     cp -R "$SETUP_PLIST" "$MNT1/System/Library/LaunchDaemons/com.vphone.jb-setup.plist"
