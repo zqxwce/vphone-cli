@@ -39,6 +39,11 @@ extern CFStringRef kSecCodeInfoEntitlementsDict;
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;
 - (BOOL)registerApplicationDictionary:(NSDictionary *)dict;
+- (BOOL)registerContainerizedApplicationWithInfoDictionaries:(NSArray *)infos
+                                              operationUUID:(NSUUID *)uuid
+                                             requestContext:(id)context
+                                               saveObserver:(id)observer
+                                          registrationError:(NSError **)error;
 - (BOOL)unregisterApplication:(id)arg1;
 @end
 
@@ -624,10 +629,27 @@ static BOOL vp_register_path(NSString *path, BOOL unregister, BOOL forceSystem) 
         }
         dictToRegister[@"_LSBundlePlugins"] = bundlePlugins;
 
-        if (![workspace registerApplicationDictionary:dictToRegister]) {
-            return NO;
+        if ([workspace registerApplicationDictionary:dictToRegister]) {
+            return YES;
         }
-        return YES;
+        // iOS 27+: the plain registerApplicationDictionary path is gated off in lsd
+        // (returns NO). Fall back to the containerized registration path, which
+        // works once lsd's clientIsEntitledForEmbeddedRegistrationOperations gate
+        // is patched (cfw_patch_lsd_embedded_reg). It returns NO even on success,
+        // so treat a nil registrationError as success.
+        SEL containerizedSel = @selector(registerContainerizedApplicationWithInfoDictionaries:operationUUID:requestContext:saveObserver:registrationError:);
+        if ([workspace respondsToSelector:containerizedSel]) {
+            NSError *regError = nil;
+            [workspace registerContainerizedApplicationWithInfoDictionaries:@[dictToRegister]
+                                                              operationUUID:[NSUUID UUID]
+                                                             requestContext:nil
+                                                               saveObserver:nil
+                                                          registrationError:&regError];
+            if (regError == nil) {
+                return YES;
+            }
+        }
+        return NO;
     }
 
     NSURL *url = [NSURL fileURLWithPath:path];

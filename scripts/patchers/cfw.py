@@ -50,6 +50,13 @@ Commands:
         can map libSystem. Self-gating (no-op if it already fits); no re-attest needed
         (header field, not a cs_validate'd code page).
 
+    patch-lsd-embedded-reg <chunks_dir> [--dry-run]
+        Force lsd's -[_LSDModifyClient clientIsEntitledForEmbeddedRegistrationOperations]
+        to always succeed (NOP its entitlement gate + re-attest the page), so app
+        (re)registration works on iOS 27 without the three privileged entitlements it
+        otherwise demands from the XPC peer. Unblocks vphoned/TrollStore/uicache app
+        installs. Self-gating (no-op on pre-iOS-27 userlands where the method is absent).
+
     patch-camera-dsc <chunks_dir> <dsc_header> [--dry-run] [--force]
         Apply the 10-patch set to the DSC chunks that makes Camera.app
         launch-survivable on a vphone VM: synthesises a single
@@ -101,6 +108,7 @@ if __name__ == "__main__":
     from patchers.cfw_patch_iomfb_swapend import patch_iomfb_swapend
     from patchers.cfw_patch_iomfb_force_kern import patch_iomfb_force_kern
     from patchers.cfw_patch_dsc_maxslide import patch_dsc_maxslide
+    from patchers.cfw_patch_lsd_embedded_reg import patch_lsd_embedded_reg
     from patchers.cfw_patch_camera_dsc import apply_all_camera_patches
     from patchers.cfw_patch_watchdogd import patch_watchdogd
     from patchers.cfw_daemons import parse_cryptex_paths, inject_daemons, patch_dropbear_plist
@@ -113,6 +121,7 @@ else:
     from .cfw_patch_iomfb_swapend import patch_iomfb_swapend
     from .cfw_patch_iomfb_force_kern import patch_iomfb_force_kern
     from .cfw_patch_dsc_maxslide import patch_dsc_maxslide
+    from .cfw_patch_lsd_embedded_reg import patch_lsd_embedded_reg
     from .cfw_patch_camera_dsc import apply_all_camera_patches
     from .cfw_patch_watchdogd import patch_watchdogd
     from .cfw_daemons import parse_cryptex_paths, inject_daemons, patch_dropbear_plist
@@ -206,6 +215,14 @@ def main():
         patch_dsc_maxslide(sys.argv[2], dry_run=dry_run)
         sys.exit(0)
 
+    elif cmd == "patch-lsd-embedded-reg":
+        if len(sys.argv) < 3:
+            print("Usage: patch_cfw.py patch-lsd-embedded-reg <chunks_dir> [--dry-run]")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv[3:]
+        patch_lsd_embedded_reg(sys.argv[2], dry_run=dry_run)
+        sys.exit(0)
+
     elif cmd == "patch-camera-dsc":
         if len(sys.argv) < 4:
             print("Usage: patch_cfw.py patch-camera-dsc <chunks_dir> <dsc_header> [--dry-run] [--force]")
@@ -267,7 +284,7 @@ def main():
         print(f"Unknown command: {cmd}")
         print("Commands: cryptex-paths, patch-seputil, patch-launchd-cache-loader, patch-camera-dsc,")
         print("          patch-mobileactivationd, patch-launchd-jetsam,")
-        print("          patch-hv-vmm-dsc, patch-iomfb-swapend, patch-iomfb-force-kern, patch-dsc-maxslide, patch-watchdogd,")
+        print("          patch-hv-vmm-dsc, patch-iomfb-swapend, patch-iomfb-force-kern, patch-dsc-maxslide, patch-lsd-embedded-reg, patch-watchdogd,")
         print("          inject-daemons, patch-dropbear-plist, inject-dylib")
         sys.exit(1)
 

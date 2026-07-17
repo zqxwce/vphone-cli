@@ -327,18 +327,29 @@ case "$IOS_VERSION" in
         ;;
 esac
 
-# Newer userlands ship a dyld shared cache that nearly fills the vphone600 26.x
-# kernel's fixed 6 GiB shared region. The kernel reserves the cache's mapped span
-# PLUS the cache-header maxSlide (512 MiB); when that overflows 0x180000000 (iOS
-# 27.0: ~5.95 GiB span + 512 MiB), _shared_region_map_and_slide returns ENOMEM,
-# dyld cannot map libSystem, and launchd (pid 1) panics at boot. Zero maxSlide so
-# the cache maps at slide 0 within the region. Self-gating: no-op for older
-# userlands (26.x/18.x) that already fit with full slide.
+# iOS-27-only DSC patches (hard-gated — a 26.x/18.x base applies neither).
+#  - maxSlide: iOS 27's dyld shared cache nearly fills the vphone600 26.x kernel's
+#    fixed 6 GiB shared region. The kernel reserves the cache's mapped span PLUS the
+#    cache-header maxSlide (512 MiB); iOS 27.0 (~5.95 GiB span + 512 MiB) overflows
+#    0x180000000, so _shared_region_map_and_slide returns ENOMEM, dyld cannot map
+#    libSystem, and launchd (pid 1) panics at boot. Zero maxSlide so the cache maps
+#    at slide 0. (The patcher also self-gates on the actual span, but older userlands
+#    fit with full slide and never need it — so it is not run there at all.)
+#  - lsd embedded-registration gate: opens lsd's containerized-registration path so
+#    the iOS-27 vpregister first-boot tool can register JB apps (uicache's
+#    registerApplicationDictionary is a no-op stub on 27). Not needed on 26.x/18.x,
+#    where uicache registers apps normally.
 DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
-if [[ -d "$DSC_DIR" ]]; then
-    echo "  [*] Checking dyld cache maxSlide vs kernel shared region..."
-    "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-dsc-maxslide "$DSC_DIR"
-fi
+case "$IOS_VERSION" in
+    27.*)
+        if [[ -d "$DSC_DIR" ]]; then
+            echo "  [*] Checking dyld cache maxSlide vs kernel shared region..."
+            "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-dsc-maxslide "$DSC_DIR"
+            echo "  [*] Patching lsd embedded-registration gate (iOS 27 app registration)..."
+            "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-lsd-embedded-reg "$DSC_DIR"
+        fi
+        ;;
+esac
 
 # ═══════════ 2/7 PATCH SEPUTIL ════════════════════════════════
 echo ""
