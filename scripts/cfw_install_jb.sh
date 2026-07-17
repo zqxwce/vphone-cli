@@ -104,6 +104,34 @@ build_tweakloader() {
     echo "$out"
 }
 
+# Build vpregister — registers JB app bundles via the containerized LaunchServices
+# API on iOS 27, where -[LSApplicationWorkspace registerApplicationDictionary:]
+# (uicache -a) is a deprecated no-op stub. Needs the lsd embedded-reg gate patch
+# (cfw_patch_lsd_embedded_reg, applied by cfw_install.sh). Deployed to /cores and
+# invoked by vphone_jb_setup.sh at first boot.
+build_vpregister() {
+    local src="$SCRIPT_DIR/vpregister/vpregister.m"
+    local out="$TEMP_DIR/vpregister"
+    local sdk cc
+
+    [[ -f "$src" ]] || die "Missing vpregister source at $src"
+
+    sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+    cc="$(xcrun --sdk iphoneos -f clang)"
+
+    "$cc" -isysroot "$sdk" \
+        -arch arm64e \
+        -miphoneos-version-min=15.0 \
+        -fobjc-arc -Os \
+        -framework Foundation \
+        -Wl,-undefined,dynamic_lookup \
+        -o "$out" \
+        "$src"
+
+    ldid_sign_ent "$out" "$SCRIPT_DIR/vphoned/entitlements.plist"
+    echo "$out"
+}
+
 get_boot_manifest_hash() {
     /bin/ls $MNT5 2>/dev/null | awk 'length($0)==96{print; exit}'
 }
@@ -367,6 +395,27 @@ if [[ -f "$SETUP_SCRIPT" ]]; then
     /bin/chmod 0755 $MNT1/cores/vphone_jb_setup.sh
     echo "  [+] vphone_jb_setup.sh -> /cores/"
 fi
+# vpregister: registers JB apps via the containerized LS API at first boot (uicache -a's
+# registerApplicationDictionary is a deprecated no-op on iOS 27). Deployed ONLY on a 27
+# base — it needs the 27-only lsd embedded-reg gate, and on 26.x/18.x uicache registers
+# apps normally. Its /cores presence IS the runtime gate in vphone_jb_setup.sh (that
+# script must NOT version-check on guest sw_vers — the hybrid guest does not reliably
+# report the 27 userland version at first boot). Version read from the mounted rootfs
+# SystemVersion.plist, the same source cfw_install.sh gates its 27 patches on.
+JB_BASE_IOS=$(/usr/bin/plutil -extract ProductVersion raw -o - "$MNT1/System/Library/CoreServices/SystemVersion.plist" 2>/dev/null || true)
+case "$JB_BASE_IOS" in
+    27.*)
+        VPREGISTER="$(build_vpregister)"
+        if [[ -f "$VPREGISTER" ]]; then
+            cp -R "$VPREGISTER" "$MNT1/cores/vpregister"
+            /bin/chmod 0755 $MNT1/cores/vpregister
+            echo "  [+] vpregister -> /cores/ (iOS $JB_BASE_IOS)"
+        fi
+        ;;
+    *)
+        echo "  [skip] vpregister (base iOS ${JB_BASE_IOS:-unknown} — 27-only; uicache registers apps on older bases)"
+        ;;
+esac
 if [[ -f "$SETUP_PLIST" ]]; then
     cp -R "$SETUP_PLIST" "$MNT1/System/Library/LaunchDaemons/com.vphone.jb-setup.plist"
     /bin/chmod 0644 $MNT1/System/Library/LaunchDaemons/com.vphone.jb-setup.plist
