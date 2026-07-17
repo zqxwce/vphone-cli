@@ -338,6 +338,8 @@ DSC_DIR="$MNT1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
 if [[ -d "$DSC_DIR" ]]; then
     echo "  [*] Checking dyld cache maxSlide vs kernel shared region..."
     "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-dsc-maxslide "$DSC_DIR"
+    echo "  [*] Patching lsd embedded-registration gate (iOS 27 app registration)..."
+    "$PYTHON3" "$SCRIPT_DIR/patchers/cfw.py" patch-lsd-embedded-reg "$DSC_DIR"
 fi
 
 # NOTE: the iOS 27 containermanagerd host-special-port-25 fix runs LATER, right after
