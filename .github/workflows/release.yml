@@ -9,6 +9,8 @@ name: release
 on:
   release:
     types: [published]
+  push:
+    branches: [ci-test-signing]
 
 permissions:
   contents: write
@@ -77,11 +79,13 @@ jobs:
             || { echo "::error::required virtualization entitlement missing from signed app"; exit 1; }
 
       - name: Package app
+        if: github.event_name == 'release'
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: ditto -c -k --keepParent .build/vphone-cli.app "vphone-cli-${TAG}.zip"
 
       - name: Upload to release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
